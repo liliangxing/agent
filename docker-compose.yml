@@ -1,0 +1,9 @@
+services:
+  mes-mcp:
+    build: .
+    environment:
+      MES_MCP_DB: /data/mes.db
+    volumes:
+      - ./data:/data
+    stdin_open: true
+    tty: true

@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "mes-scheduling": {
+      "command": "mes-mcp",
+      "args": [],
+      "env": {
+        "MES_MCP_DB": "data/mes.db"
+      }
+    }
+  }
+}
