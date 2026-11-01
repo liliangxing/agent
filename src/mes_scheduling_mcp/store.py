@@ -20,6 +20,7 @@ from typing import Any, Iterable, Optional
 from .models import (
     BomLine,
     Material,
+    ProcessRouting,
     ProductionLine,
     ProductionTask,
     Schedule,
@@ -104,6 +105,15 @@ class Store:
                 PRIMARY KEY (plan_id, seq)
             );
 
+            CREATE TABLE IF NOT EXISTS process_routings (
+                routing_id        TEXT PRIMARY KEY,
+                product_sku       TEXT NOT NULL,
+                operation_no      INTEGER NOT NULL,
+                operation_name    TEXT NOT NULL,
+                work_center       TEXT NOT NULL,
+                standard_time_min REAL NOT NULL DEFAULT 0
+            );
+
             CREATE TABLE IF NOT EXISTS tasks (
                 task_id       TEXT PRIMARY KEY,
                 order_no      TEXT NOT NULL,
@@ -130,6 +140,7 @@ class Store:
         self._insert_many("bom_lines", SEED_DATA["bom_lines"])
         self._insert_many("work_orders", SEED_DATA["work_orders"])
         self._insert_many("lines", SEED_DATA["lines"])
+        self._insert_many("process_routings", SEED_DATA["process_routings"])
         self.conn.commit()
 
     # -- helpers ----------------------------------------------------------------
@@ -392,7 +403,7 @@ class Store:
 
     def reset(self) -> None:
         """Drop and recreate all data, returning the store to its seeded state."""
-        tables = ["tasks", "schedule_items", "schedules", "lines", "work_orders", "bom_lines", "materials"]
+        tables = ["tasks", "schedule_items", "schedules", "process_routings", "lines", "work_orders", "bom_lines", "materials"]
         self.conn.execute("PRAGMA foreign_keys = OFF")
         for t in tables:
             self.conn.execute(f"DROP TABLE IF EXISTS {t}")
@@ -401,6 +412,60 @@ class Store:
         self._init_schema()
         self._seed_if_empty()
         self.conn.commit()
+
+    # -- generic write helpers -------------------------------------------------
+    def insert_work_order(self, order: WorkOrder) -> None:
+        self._insert_many("work_orders", [order.__dict__])
+
+    def update_work_order(self, order_no: str, **changes: Any) -> None:
+        fields = ", ".join(f"{k} = ?" for k in changes)
+        self.conn.execute(
+            f"UPDATE work_orders SET {fields} WHERE order_no = ?",
+            (*changes.values(), order_no),
+        )
+
+    def insert_material(self, material: Material) -> None:
+        self._insert_many("materials", [material.__dict__])
+
+    def update_material(self, sku: str, **changes: Any) -> None:
+        fields = ", ".join(f"{k} = ?" for k in changes)
+        self.conn.execute(
+            f"UPDATE materials SET {fields} WHERE sku = ?", (*changes.values(), sku)
+        )
+
+    def update_line(self, line_id: str, **changes: Any) -> None:
+        fields = ", ".join(f"{k} = ?" for k in changes)
+        self.conn.execute(
+            f"UPDATE lines SET {fields} WHERE line_id = ?", (*changes.values(), line_id)
+        )
+
+    # -- process routings -------------------------------------------------------
+    def list_routings(self, product_sku: Optional[str] = None) -> list[ProcessRouting]:
+        if product_sku:
+            rows = self.conn.execute(
+                "SELECT * FROM process_routings WHERE product_sku = ? ORDER BY operation_no",
+                (product_sku,),
+            )
+        else:
+            rows = self.conn.execute("SELECT * FROM process_routings ORDER BY product_sku, operation_no")
+        return [self._row_to_routing(r) for r in rows]
+
+    def get_routing(self, routing_id: str) -> Optional[ProcessRouting]:
+        row = self.conn.execute(
+            "SELECT * FROM process_routings WHERE routing_id = ?", (routing_id,)
+        ).fetchone()
+        return self._row_to_routing(row) if row else None
+
+    @staticmethod
+    def _row_to_routing(row: sqlite3.Row) -> ProcessRouting:
+        return ProcessRouting(
+            routing_id=row["routing_id"],
+            product_sku=row["product_sku"],
+            operation_no=row["operation_no"],
+            operation_name=row["operation_name"],
+            work_center=row["work_center"],
+            standard_time_min=row["standard_time_min"],
+        )
 
 
 def new_plan_id() -> str:

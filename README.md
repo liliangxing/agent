@@ -4,11 +4,19 @@
 
 它把「江苏某精密零部件厂」案例（MES → AI 排产 Agent → ERP）做成一个开箱即用的参考实现：
 内置模拟 ERP（工单 / 物料 / BOM）、一个带**物料齐套 + 产能约束**的排产引擎、以及模拟 MES
-（产线 / 生产任务 / 报工），全部通过 16 个 MCP 工具对 AI Agent 开放。
+（产线 / 生产任务 / 报工），全部通过 MCP 工具对 AI Agent 开放。
 
 - 语言 / 协议：Python 3.11+，[MCP (Model Context Protocol)](https://modelcontextprotocol.io)
 - 存储：SQLite（stdlib，零额外数据库依赖），种子数据自动初始化
 - 许可：[MIT](./LICENSE)
+
+生产形态特性（对齐真实开源 ERP/MES MCP 项目的工程实践）：
+
+- **资源目录 + 通用 CRUD**：7 个资源（工单 / 物料 / 产线 / 生产任务 / 排产计划 / 工序路线 / 系统），自动生成 `query` / `get` / `count` / `create` / `update` 工具，共 **38 个工具**
+- **严格入参校验**：Pydantic 模型 `extra="forbid"`，非法字段、缺字段直接报错
+- **鉴权 + RBAC**：API Key 鉴权与「资源 × 操作」访问控制矩阵，默认 fail-closed
+- **观测**：工具调用统计、JSONL 用量日志、错误脱敏
+- **后端抽象**：`ManufacturingBackend` 抽象 + `MemoryBackend`，预留真实 ERP / MES 的接入缝
 
 ---
 
@@ -16,8 +24,9 @@
 
 - [案例背景（01 案例）](#案例背景01-案例)
 - [架构](#架构)
-- [能力清单（16 个工具）](#能力清单16-个工具)
+- [能力清单（38 个工具）](#能力清单38-个工具)
 - [快速开始](#快速开始)
+- [鉴权与访问控制](#鉴权与访问控制)
 - [接入 AI 客户端](#接入-ai-客户端)
 - [演示](#演示)
 - [测试](#测试)
@@ -73,7 +82,7 @@ sequenceDiagram
     participant S as "MCP Server"
     participant ER as "ERP"
     participant ME as "MES"
-    Agent->>S: erp_list_work_orders
+    Agent->>S: work_order_query
     S->>ER: 查询当日工单
     ER-->>S: 工单列表
     Agent->>S: erp_check_material_availability
@@ -91,33 +100,66 @@ sequenceDiagram
 代码分层：
 
 ```
-MCP 工具层 (server.py)  →  领域服务层 (erp / scheduling / mes)  →  存储层 (store.py)
+MCP 工具层 (server.py)
+  ├── 通用 CRUD 工具（由 catalog.py 资源目录驱动）
+  └── 领域工具（erp_check_material_availability / schedule_* / mes_* / 运维）
+        │
+        ├── schemas.py   严格 Pydantic 入参模型
+        ├── errors.py    McpError 分层错误 + 脱敏
+        ├── auth.py      API Key 鉴权（可选）
+        ├── access.py    RBAC 访问控制（资源 × 操作，fail-closed）
+        ├── catalog.py   资源目录（7 个资源）
+        └── observability.py  用量日志 + 统计
+        │
+        ▼
+  后端抽象 backend.py（ManufacturingBackend → MemoryBackend）
+        │
+        ▼
+  领域服务层 (erp / scheduling / mes)  →  存储层 (store.py)
 ```
 
 MCP 协议边界只出现在 `server.py`，领域逻辑与 MCP 解耦，便于单测与替换成真实 ERP/MES 接口。
 
 ---
 
-## 能力清单（16 个工具）
+## 能力清单（38 个工具）
+
+### 通用资源工具（由资源目录自动生成）
+
+| 资源 | query | get | count | create | update |
+| --- | --- | --- | --- | --- | --- |
+| `work_order` | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `material` | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `production_line` | ✓ | ✓ | ✓ | — | ✓ |
+| `production_task` | ✓ | ✓ | ✓ | — | ✓ |
+| `schedule` | ✓ | ✓ | ✓ | — | — |
+| `process_routing` | ✓ | ✓ | ✓ | — | — |
+
+命名规则：`{resource}_query`、`{resource}_get`、`{resource}_count`、`{resource}_create`、`{resource}_update`。
+写操作用例：`work_order_create` / `material_create` 提交完整字段（严格校验、缺字段或多余字段均报错）。
+
+### 领域工具（业务闭环）
 
 | 工具 | 说明 |
 | --- | --- |
-| `erp_list_work_orders` | 查询 ERP 工单，可按状态 / 交期过滤 |
-| `erp_get_work_order` | 按工单号查询单个工单 |
 | `erp_release_work_order` | 草稿工单发布为待排产 |
-| `erp_list_materials` | 查询物料库存（库存 / 占用 / 可用） |
 | `erp_check_material_availability` | BOM 齐套检查，返回所需、缺口、是否满足 |
 | `capacity_query` | 查询各产线产能与剩余可用小时 |
 | `schedule_generate` | 生成排产计划（齐套 + 产能约束） |
-| `schedule_list` | 查询历史排产计划 |
-| `schedule_get` | 查询单个排产计划明细 |
-| `mes_list_lines` | 查询 MES 产线（设备）状态 |
+| `schedule_detail` | 查询单个排产计划的明细行 |
 | `mes_import_work_orders` | 将 ERP 工单录入 MES（对应此前人工录入） |
 | `schedule_dispatch` | 下发排产计划到产线 |
-| `mes_list_tasks` | 查询 MES 生产任务 |
 | `mes_report_progress` | 报工 / 完工 / 释放产线 |
+
+### 系统与运维工具
+
+| 工具 | 说明 |
+| --- | --- |
+| `list_resources` | 列出全部资源目录及其描述 |
+| `get_resource_schema` | 查看某资源的字段模型与可读写字段 |
 | `health_check` | 服务健康检查与运行统计 |
-| `reset_demo_data` | 重置演示数据到种子状态 |
+| `usage_stats` | 工具调用统计（次数 / 成败 / 耗时 / 错误类型） |
+| `reset_demo_data` | 重置演示数据到种子状态（需要 admin 权限） |
 
 ---
 
@@ -144,6 +186,26 @@ MES_MCP_DB=data/mes.db mes-mcp
 ```
 
 首次启动会自动建表并写入演示种子数据（1 个刻意缺料的工单用于演示齐套缺口）。
+
+---
+
+## 鉴权与访问控制
+
+默认**不开启**鉴权（本地 / stdio 场景开箱即用）。要限制只有持有效 API Key 的客户端才能调用，启动时设置：
+
+```bash
+# 简单令牌：只要带上这个 key 即通过
+MES_MCP_AUTH=your-shared-secret mes-mcp
+
+# 多 key + 角色：kvx 或 JSON 格式（入参名与角色是 api_key=referee,super_admin）
+MES_MCP_API_KEYS='{"secret-a": "operator", "secret-b": "super_admin"}' mes-mcp
+```
+
+角色权限矩阵在 `access.py` 中定义，默认 fail-closed：写操作（create / update / dispatch / report）需要 `operator` 以上，
+`reset_demo_data` 需要 `super_admin`。未命中规则的调用一律拒绝。
+
+观测默认写 `usage_log.jsonl`（可用 `MES_MCP_USAGE_LOG` 指定路径），并可通过
+`usage_stats` / `health_check` 查询运行统计。
 
 ---
 
@@ -214,7 +276,14 @@ docker run --rm -v "$PWD/data:/data" -e MES_MCP_DB=/data/mes.db mes-scheduling-m
 ```
 .
 ├── src/mes_scheduling_mcp/
-│   ├── server.py        # MCP 工具层（16 个工具，FastMCP）
+│   ├── server.py        # MCP 工具层（资源目录驱动 + 领域工具 + 鉴权 + RBAC + 观测）
+│   ├── catalog.py       # 资源目录（7 个资源）
+│   ├── schemas.py       # 严格 Pydantic 入参模型（extra="forbid"）
+│   ├── errors.py        # McpError 分层错误 + 脱敏
+│   ├── auth.py          # API Key 鉴权（可选）
+│   ├── access.py        # RBAC 访问控制（资源 × 操作，fail-closed）
+│   ├── observability.py # 用量日志 + 统计
+│   ├── backend.py       # ManufacturingBackend 抽象 + MemoryBackend
 │   ├── erp.py           # ERP 领域：工单 / 物料 / BOM 齐套
 │   ├── scheduling.py    # 排产引擎：齐套 + 产能约束贪心排程
 │   ├── mes.py           # MES 领域：导入 / 下发 / 报工 / 产线状态
@@ -224,6 +293,7 @@ docker run --rm -v "$PWD/data:/data" -e MES_MCP_DB=/data/mes.db mes-scheduling-m
 │   └── __main__.py      # python -m 入口
 ├── examples/
 │   └── scheduling_agent_demo.py  # 排产 Agent 演示（MCP 客户端）
+├── web_demo/            # 手机可访问的 HTTP 演示（复用同一套领域代码）
 ├── tests/               # 单元 + 集成测试
 ├── pyproject.toml
 ├── Dockerfile

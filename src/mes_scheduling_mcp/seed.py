@@ -98,4 +98,14 @@ SEED_DATA: dict = {
         {"line_id": "LATHE-01", "name": "1 号车削中心", "status": "IDLE", "capacity_per_hour": 15.0, "shift_start": "08:00", "shift_hours": 12.0},
         {"line_id": "MILL-01", "name": "1 号五轴铣床", "status": "MAINTENANCE", "capacity_per_hour": 12.0, "shift_start": "08:00", "shift_hours": 8.0},
     ],
+    "process_routings": [
+        {"routing_id": "RT-VALVE-001", "product_sku": "P-VALVE-BODY", "operation_no": 10, "operation_name": "下料", "work_center": "SAW-01", "standard_time_min": 2.0},
+        {"routing_id": "RT-VALVE-002", "product_sku": "P-VALVE-BODY", "operation_no": 20, "operation_name": "CNC 粗加工", "work_center": "CNC-01", "standard_time_min": 14.0},
+        {"routing_id": "RT-VALVE-003", "product_sku": "P-VALVE-BODY", "operation_no": 30, "operation_name": "精加工", "work_center": "CNC-01", "standard_time_min": 12.0},
+        {"routing_id": "RT-FLANGE-001", "product_sku": "P-FLANGE", "operation_no": 10, "operation_name": "下料", "work_center": "SAW-01", "standard_time_min": 1.5},
+        {"routing_id": "RT-FLANGE-002", "product_sku": "P-FLANGE", "operation_no": 20, "operation_name": "钻孔攻丝", "work_center": "CNC-02", "standard_time_min": 10.0},
+        {"routing_id": "RT-SHAFT-001", "product_sku": "P-SHAFT", "operation_no": 10, "operation_name": "车削", "work_center": "LATHE-01", "standard_time_min": 18.0},
+        {"routing_id": "RT-SHAFT-002", "product_sku": "P-SHAFT", "operation_no": 20, "operation_name": "磨削", "work_center": "GRIND-01", "standard_time_min": 8.0},
+        {"routing_id": "RT-NOZZLE-001", "product_sku": "P-NOZZLE", "operation_no": 10, "operation_name": "车铣复合", "work_center": "LATHE-01", "standard_time_min": 9.0},
+    ],
 }

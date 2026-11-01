@@ -20,27 +20,52 @@ async def _session():
             yield session
 
 
+async def _tool_names(session):
+    tools = await session.list_tools()
+    return {t.name for t in tools.tools}
+
+
 async def test_list_tools_over_stdio():
     async for session in _session():
-        tools = await session.list_tools()
-        names = {t.name for t in tools.tools}
-        assert "erp_list_work_orders" in names
+        names = await _tool_names(session)
+        assert "work_order_query" in names
         assert "schedule_generate" in names
         assert "schedule_dispatch" in names
         assert "mes_report_progress" in names
+        assert "health_check" in names
+        assert "list_resources" in names
+        assert "get_resource_schema" in names
 
 
 async def test_workflow_over_stdio():
     async for session in _session():
-        # query today's orders
-        res = await session.call_tool("erp_list_work_orders", {"status": "RELEASED"})
+        res = await session.call_tool("work_order_query", {"status": "RELEASED"})
+        assert not res.isError
         assert res.content
 
-        # generate schedule
         res = await session.call_tool("schedule_generate", {})
+        assert not res.isError
         text = res.content[0].text
-        assert 'WO-2026-0002' in text  # the cooled shortage appears in output
+        assert "WO-2026-0002" in text  # the cooled shortage appears in output
 
-        # health check
         res = await session.call_tool("health_check", {})
+        assert not res.isError
         assert "ok" in res.content[0].text
+
+
+async def test_write_tool_enforced_schema():
+    async for session in _session():
+        # work_order_create rejects unknown fields (extra="forbid")
+        res = await session.call_tool(
+            "work_order_create",
+            {"data": {"no": "WC-HACK", "bogus_field": 1}},
+        )
+        assert res.isError
+        assert "bogus_field" in res.content[0].text
+
+
+async def test_resource_catalog_exposes_work_orders():
+    async for session in _session():
+        res = await session.call_tool("list_resources", {})
+        text = res.content[0].text
+        assert "work_order" in text

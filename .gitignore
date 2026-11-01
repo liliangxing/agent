@@ -178,3 +178,6 @@
 # SQLite runtime data
 **/data/*.db
 **/data/*.db-*
+
+# Observability runtime logs
+usage_log.jsonl

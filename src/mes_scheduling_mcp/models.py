@@ -92,6 +92,18 @@ class ProductionLine:
 
 
 @dataclass(frozen=True)
+class ProcessRouting:
+    """A step in a product's manufacturing process (工序)."""
+
+    routing_id: str
+    product_sku: str
+    operation_no: int
+    operation_name: str
+    work_center: str
+    standard_time_min: float
+
+
+@dataclass(frozen=True)
 class ProductionTask:
     task_id: str
     order_no: str

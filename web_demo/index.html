@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MES ↔ 排产 Agent ↔ ERP 演示</title>
+  <style>
+    :root {
+      --bg: #0f1117; --panel: #171a22; --panel2: #1e222d;
+      --border: #2a2f3a; --text: #e6e8ee; --muted: #9aa3b2;
+      --accent: #4f8cff; --accent2: #37d39b; --warn: #ffb020; --danger: #ff5d5d;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      line-height: 1.6; padding-bottom: 40px;
+    }
+    .wrap { max-width: 720px; margin: 0 auto; padding: 16px; }
+    header { padding: 20px 0 8px; }
+    h1 { font-size: 22px; margin: 0 0 6px; }
+    .sub { color: var(--muted); font-size: 14px; }
+    .badges { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .badge {
+      background: var(--panel2); border: 1px solid var(--border);
+      border-radius: 8px; padding: 6px 10px; font-size: 13px;
+    }
+    .badge b { color: var(--accent2); }
+    .card {
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 12px; padding: 14px; margin: 14px 0;
+    }
+    .card h2 { font-size: 15px; margin: 0 0 10px; color: #c7ccd8; }
+    .btn {
+      display: inline-block; background: var(--accent); color: #fff; border: 0;
+      border-radius: 8px; padding: 10px 16px; font-size: 14px; cursor: pointer;
+    }
+    .btn:disabled { opacity: .5; cursor: not-allowed; }
+    .btn.ghost { background: var(--panel2); border: 1px solid var(--border); color: var(--text); }
+    .flow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); }
+    .flow span { background: var(--panel2); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; white-space: nowrap; }
+    .flow .arrow { background: none; border: none; padding: 0 2px; }
+    .step { border-left: 3px solid var(--accent); padding: 8px 12px; margin: 10px 0; background: var(--panel2); border-radius: 0 8px 8px 0; }
+    .step .name { font-size: 14px; font-weight: 600; }
+    .step .tool { font-size: 12px; color: var(--accent2); font-family: monospace; }
+    pre { background: #0a0c11; border: 1px solid var(--border); border-radius: 8px; padding: 10px; overflow: auto; font-size: 12px; color: #cdd3e0; max-height: 240px; }
+    .summary { display: flex; gap: 10px; flex-wrap: wrap; }
+    .metric { flex: 1; min-width: 90px; background: var(--panel2); border: 1px solid var(--border); border-radius: 10px; padding: 12px; text-align: center; }
+    .metric .num { font-size: 24px; font-weight: 700; color: var(--accent2); }
+    .metric .label { font-size: 12px; color: var(--muted); }
+    .warn { color: var(--warn); } .ok { color: var(--accent2); }
+    .note { font-size: 13px; color: var(--muted); }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+    th { color: var(--muted); font-weight: 500; }
+    .tag { display: inline-block; font-size: 11px; border-radius: 4px; padding: 1px 6px; background: var(--panel2); border: 1px solid var(--border); color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>MES ↔ AI 排产 Agent ↔ ERP</h1>
+      <div class="sub">江苏某精密零部件厂 · 案例还原（可运行演示）</div>
+      <div class="badges">
+        <span class="badge">改造前成本 3.2 万</span>
+        <span class="badge">改造后成本 4.8 千</span>
+        <span class="badge">节省 <b>85%</b></span>
+      </div>
+    </header>
+
+    <div class="card">
+      <h2>核心流程</h2>
+      <div class="flow">
+        <span>ERP 工单</span><span class="arrow">→</span>
+        <span>齐套检查</span><span class="arrow">→</span>
+        <span>产能查询</span><span class="arrow">→</span>
+        <span>自动排产</span><span class="arrow">→</span>
+        <span>下发 MES</span><span class="arrow">→</span>
+        <span>报工闭环</span>
+      </div>
+      <div class="note" style="margin-top:10px;">
+        改造前：排产员下班前手工把 ERP 当日工单录入 MES。<br />
+        改造后：以上 6 步由排产 Agent 通过 MCP Server 自动完成。
+      </div>
+      <div style="margin-top:14px; display:flex; gap:8px; flex-wrap:wrap;">
+        <button class="btn" id="runAll">一键跑通完整流程</button>
+        <button class="btn ghost" id="reset">重置数据</button>
+      </div>
+    </div>
+
+    <div class="card" id="resultCard" style="display:none;">
+      <h2>执行结果</h2>
+      <div class="summary" id="metrics"></div>
+      <div id="steps"></div>
+    </div>
+
+    <div class="card">
+      <h2>MCP 工具清单（16 个）</h2>
+      <table id="toolTable">
+        <thead><tr><th>工具</th><th>分组</th><th>说明</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>如何接入 AI 客户端</h2>
+      <pre>{
+  "mcpServers": {
+    "mes-scheduling": {
+      "command": "mes-mcp",
+      "env": { "MES_MCP_DB": "data/mes.db" }
+    }
+  }
+}</pre>
+      <div class="note">本网页演示与 MCP Server 共用同一套领域代码（erp / scheduling / mes），网页上跑通的流程即等价于 MCP 工具能力。</div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (s) => document.querySelector(s);
+    const api = async (path, opts) => {
+      const r = await fetch(path, opts);
+      return r.json();
+    };
+
+    const fmt = (v) => JSON.stringify(v, null, 2);
+
+    async function loadTools() {
+      const { tools } = await api('/api/tools');
+      const tbody = $('#toolTable tbody');
+      tbody.innerHTML = tools.map(t =>
+        `<tr><td style="font-family:monospace;color:#4f8cff">${t.name}</td><td><span class="tag">${t.group}</span></td><td>${t.desc}</td></tr>`
+      ).join('');
+    }
+
+    function renderSteps(steps) {
+      $('#steps').innerHTML = steps.map(s =>
+        `<div class="step">
+           <div class="name">${s.step}</div>
+           <div class="tool">${s.tool}</div>
+           <pre>${fmt(s.result).replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]))}</pre>
+         </div>`
+      ).join('');
+    }
+
+    function renderMetrics(health) {
+      const m = [
+        ['工单数', health.work_orders],
+        ['生产任务', health.production_tasks],
+        ['产线', health.lines],
+        ['忙碌产线', health.lines_busy],
+      ];
+      $('#metrics').innerHTML = m.map(([l, n]) => `<div class="metric"><div class="num">${n}</div><div class="label">${l}</div></div>`).join('');
+    }
+
+    $('#runAll').onclick = async () => {
+      const btn = $('#runAll');
+      btn.disabled = true; btn.textContent = '执行中…';
+      try {
+        const r = await api('/api/run_all', { method: 'POST' });
+        renderMetrics(r.health);
+        renderSteps(r.steps);
+        $('#resultCard').style.display = 'block';
+        $('#resultCard').scrollIntoView({ behavior: 'smooth' });
+      } catch (e) {
+        alert('执行失败：' + e.message);
+      } finally {
+        btn.disabled = false; btn.textContent = '一键跑通完整流程';
+      }
+    };
+
+    $('#reset').onclick = async () => {
+      await api('/api/reset', { method: 'POST' });
+      $('#resultCard').style.display = 'none';
+    };
+
+    loadTools();
+  </script>
+</body>
+</html>

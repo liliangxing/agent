@@ -39,8 +39,8 @@ async def run() -> None:
             print("=" * 66)
 
             print("\n[1] 拉取 ERP 当日待排产工单")
-            orders = await tool("erp_list_work_orders", {"status": "RELEASED"})
-            for o in orders:
+            orders = await tool("work_order_query", {"status": "RELEASED"})
+            for o in orders["items"]:
                 print(f"    {o['order_no']}  {o['product_name']:<6} x{o['quantity']}  "
                       f"交期 {o['due_date']}  优先 {o['priority']}")
 
@@ -67,9 +67,9 @@ async def run() -> None:
             print(f"    下发任务数 = {dispatched['dispatched_count']}")
 
             print("\n[6] 报工：完成首条任务")
-            tasks = await tool("mes_list_tasks", {"status": "DISPATCHED"})
-            if tasks:
-                t = tasks[0]
+            tasks = await tool("production_task_query", {"status": "DISPATCHED"})
+            if tasks["items"]:
+                t = tasks["items"][0]
                 updated = await tool(
                     "mes_report_progress",
                     {"task_id": t["task_id"], "actual_qty": t["quantity"], "complete": True},
