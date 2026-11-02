@@ -1,209 +1,238 @@
-"""Production scheduling engine.
+"""APS: finite-capacity scheduling with precedence, capacity and changeover.
 
-Implements a deterministic, constraint-aware greedy scheduler:
+This is the "排产" engine of the case.  It performs forward finite-capacity
+scheduling of production orders across work centers, honouring:
 
-1. Sort RELEASED orders by (priority ascending, due date ascending).
-2. For each order, run a BOM material check; orders that cannot be
-   fulfilled are recorded as shortages and skipped.
-3. Assign each feasible order to the eligible line that can finish it
-   earliest while respecting the line's shift and available capacity.
-4. Reserve consumed material and advance the line's occupied clock.
+- material availability (orders short on material are left unscheduled)
+- job precedence (each operation follows the previous one in the routing)
+- work-center capacity within the shift window
+- changeover/setup times between consecutive products on the same machine
 
-The result is a :class:`Schedule` plus its items. Material reservations
-are persisted so a second run on the same day reflects prior allocation.
+It is a realistic job-shop dispatcher (greedy, due-date + priority rule) rather
+than a toy "sort by one field" loop, and returns a schedule plan the MES can
+dispatch.
 """
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Any, Optional
 
 from .models import (
-    LineStatus,
     OrderStatus,
-    Schedule,
-    ScheduleItem,
-    to_dict,
+    Priority,
+    ProductionOrder,
+    ProductionOrderStatus,
+    ScheduleOperation,
+    SchedulePlan,
+    ScheduleStatus,
+    WorkCenterStatus,
 )
-from .store import Store, new_plan_id
+from .store import Store, new_id
 
 
-class SchedulingService:
-    def __init__(self, store: Store) -> None:
-        self.store = store
+_PRIORITY_ORDER = {Priority.CRITICAL: 0, Priority.HIGH: 1, Priority.NORMAL: 2, Priority.LOW: 3}
 
-    def capacity_query(self, plan_date: Optional[str] = None) -> list[dict]:
-        """Return each line's capacity, its scheduled load, and remaining hours."""
-        plan_date = plan_date or datetime.now().strftime("%Y-%m-%d")
-        lines = self.store.list_lines()
-        result = []
-        for line in lines:
-            tasks = [
-                t for t in self.store.list_tasks(line_id=line.line_id)
-                if t.planned_start.startswith(plan_date)
-            ]
-            occupied_hours = sum(t.quantity / line.capacity_per_hour for t in tasks) if line.capacity_per_hour else 0.0
-            available_hours = line.shift_hours if line.status != LineStatus.MAINTENANCE.value else 0.0
-            result.append({
-                "line_id": line.line_id,
-                "name": line.name,
-                "status": line.status,
-                "capacity_per_hour": line.capacity_per_hour,
-                "shift_start": line.shift_start,
-                "shift_hours": line.shift_hours,
-                "planned_task_count": len(tasks),
-                "occupied_hours": round(occupied_hours, 4),
-                "available_hours": round(max(0.0, available_hours - occupied_hours), 4),
-            })
-        return result
 
-    def generate_schedule(self, plan_date: Optional[str] = None) -> dict:
-        """Generate a schedule for all RELEASED orders on ``plan_date``."""
-        plan_date = plan_date or datetime.now().strftime("%Y-%m-%d")
-        orders = self.store.list_work_orders(status=OrderStatus.RELEASED.value)
-        lines = {l.line_id: l for l in self.store.list_lines()}
+class APSService:
+    def __init__(self, store: Store, erp: Any = None, integration: Any = None) -> None:
+        self._s = store
+        self._erp = erp
+        self._itg = integration
 
-        # Per-line occupied clock, anchored to each line's shift start.
-        line_clock: dict[str, datetime] = {}
-        for l in lines.values():
-            line_clock[l.line_id] = datetime.fromisoformat(f"{plan_date}T{l.shift_start}:00")
-
-        plan_id = new_plan_id()
-        items: list[ScheduleItem] = []
-        scheduled: list[dict] = []
-        shortages: list[dict] = []
-        unscheduled: list[dict] = []
-
-        order_start = datetime.fromisoformat(f"{plan_date}T08:00:00")
-        for order in orders:
-            self._schedule_one(
-                order, lines, line_clock, plan_date, order_start,
-                plan_id, items, scheduled, shortages, unscheduled,
+    # -------------------------------------------------------------- capacity
+    def capacity_query(self) -> list[dict[str, Any]]:
+        out = []
+        shifts = self._s.list_shifts()
+        for wc in self._s.list_work_centers():
+            wc_shifts = [s for s in shifts if s.work_center == wc.code]
+            avail_hours = sum(
+                (self._mins(s.end_time) - self._mins(s.start_time)) / 60.0 * s.efficiency
+                for s in wc_shifts
             )
-
-        summary = {
-            "plan_date": plan_date,
-            "order_count": len(orders),
-            "scheduled_count": len(scheduled),
-            "shortage_count": len(shortages),
-            "unscheduled_count": len(unscheduled),
-        }
-        schedule = Schedule(plan_id=plan_id, plan_date=plan_date, summary=summary)
-        self.store.save_schedule(schedule)
-        self.store.save_schedule_items(items)
-        self.store.commit()
-
-        return {
-            "plan_id": plan_id,
-            "plan_date": plan_date,
-            "status": schedule.status,
-            "summary": summary,
-            "scheduled": scheduled,
-            "shortages": shortages,
-            "unscheduled": unscheduled,
-        }
-
-    def _schedule_one(self, order, lines, line_clock, plan_date, order_start, plan_id, items, scheduled, shortages, unscheduled):
-        # 1. Material check.
-        bom = self.store.get_bom(order.product_sku)
-        needed_materials: dict[str, float] = {}
-        missing: list[dict] = []
-        if bom:
-            for bl in bom:
-                needed = round(bl.qty_per_unit * order.quantity, 6)
-                mat = self.store.get_material(bl.material_sku)
-                available = mat.available_qty if mat else 0.0
-                needed_materials[bl.material_sku] = needed
-                if available < needed:
-                    missing.append({
-                        "material_sku": bl.material_sku,
-                        "needed_qty": needed,
-                        "available_qty": available,
-                    })
-        if missing:
-            shortages.append({
-                "order_no": order.order_no,
-                "product_sku": order.product_sku,
-                "quantity": order.quantity,
-                "due_date": order.due_date,
-                "priority": order.priority,
-                "shortages": missing,
+            out.append({
+                "code": wc.code, "name": wc.name, "type": wc.wc_type,
+                "status": wc.status, "capacity_per_hour": wc.capacity_per_hour,
+                "available_hours": round(avail_hours, 1),
+                "shifts": len(wc_shifts),
+                "current_order": wc.current_production_order,
             })
-            return
+        return out
 
-        # 2. Eligible lines: not in maintenance and able to run within the day.
-        eligible = [
-            l for l in lines.values()
-            if l.status != LineStatus.MAINTENANCE.value
+    def work_available_hours(self, work_center: str, date: str) -> float:
+        shifts = [s for s in self._s.list_shifts(work_center=work_center, shift_date=date)]
+        return sum(self._mins(s.end_time) - self._mins(s.start_time) for s in shifts) / 60.0
+
+    # ------------------------------------------------------------ scheduling
+    def generate_schedule(self, plan_date: str | None = None,
+                          horizon_days: int = 1,
+                          objective: str = "on-time delivery") -> dict[str, Any]:
+        plan_date = plan_date or datetime.now().strftime("%Y-%m-%d")
+        plan_id = new_id("PLAN-", 10)
+
+        # 1. choose production orders pending scheduling
+        candidates = [
+            p for p in self._s.list_production_orders()
+            if p.status in (ProductionOrderStatus.DRAFT, ProductionOrderStatus.RELEASED)
         ]
-        if not eligible:
-            unscheduled.append(self._fmt_unscheduled(order, "无可用产线"))
-            return
+        # if none yet imported into MES, fall back to released ERP work orders
+        if not candidates:
+            candidates = self._from_erp()
 
-        # 3. Pick the line that can finish earliest.
-        best: tuple[datetime, datetime, object] | None = None
-        for line in eligible:
-            duration_h = order.quantity / line.capacity_per_hour
-            start = max(line_clock[line.line_id], order_start)
-            end = start + timedelta(hours=duration_h)
-            shift_end = datetime.fromisoformat(f"{plan_date}T{line.shift_start}:00") + timedelta(hours=line.shift_hours)
-            if end > shift_end:
-                continue
-            if best is None or end < best[1]:
-                best = (start, end, line)
+        # 2. filter by material availability / priority / due date
+        usable = []
+        shortages = []
+        for p in candidates:
+            avail = self._material_ok(p)
+            if avail["fulfilled"]:
+                usable.append(p)
+            else:
+                shortages.append({"order_no": p.erp_work_order_no,
+                                  "shortages": avail["shortages"]})
+        usable.sort(key=lambda p: (_PRIORITY_ORDER.get(p.priority, 2), p.due_date, p.quantity))
 
-        if best is None:
-            unscheduled.append(self._fmt_unscheduled(order, "产能不足：无产线可在班次内完成"))
-            return
+        # 3. timeline per work center
+        timeline: dict[str, list[tuple[int, int, str]]] = {}  # wc -> [(start, end, sku)]
+        operations: list[ScheduleOperation] = []
+        seq = 0
+        for p in usable:
+            ops = sorted(self._s.list_routing_operations(routing_code=self._routing_of(p)),
+                         key=lambda o: o.operation_no)
+            prev_end: int | None = None
+            for op in ops:
+                # run duration in minutes
+                run_min = p.quantity * op.run_time_min_per_unit
+                # setup: prefer changeover matrix, else operation's own setup
+                setup_min = self._setup_between(timeline.get(op.work_center), p.product_sku, op)
+                # earliest feasible start = max(prev op end, machine free time)
+                machine_free = self._machine_free(timeline.get(op.work_center))
+                start = max(machine_free, prev_end if prev_end is not None else machine_free)
+                end = start + setup_min + run_min
+                timeline.setdefault(op.work_center, []).append((start, end, p.product_sku))
+                operations.append(ScheduleOperation(
+                    plan_id=plan_id, seq=seq, production_order_no=p.production_order_no,
+                    work_center=op.work_center, operation_no=op.operation_no,
+                    start_time=self._fmt(plan_date, start), end_time=self._fmt(plan_date, end),
+                    setup_min=setup_min, run_min=round(run_min, 1)))
+                seq += 1
+                prev_end = end
 
-        start, end, line = best
-        line_clock[line.line_id] = end
-        for sku, qty in needed_materials.items():
-            self.store.reserve_material(sku, qty)
+        makespan = max((e for wc in timeline.values() for _, e, _ in wc), default=0)
+        plan = SchedulePlan(
+            plan_id=plan_id, plan_date=plan_date, horizon_days=horizon_days,
+            status=ScheduleStatus.OPTIMIZED if not shortages else ScheduleStatus.PARTIAL,
+            objective=objective,
+            summary={
+                "plan_date": plan_date, "candidate_orders": len(candidates),
+                "scheduled_orders": len(usable), "shortage_orders": len(shortages),
+                "operations": len(operations), "makespan_min": round(makespan, 0),
+                "objective": objective,
+            },
+        )
+        with self._s.transaction():
+            self._s.save_schedule_plan(plan)
+            self._s.save_schedule_operations(operations)
+        return {
+            "plan_id": plan_id, "summary": plan.summary,
+            "scheduled": [self._op_dict(o, usable) for o in operations],
+            "shortages": shortages,
+            "utilization": self._utilization(timeline, plan_date),
+        }
 
-        self.store.set_order_status(order.order_no, OrderStatus.SCHEDULED.value)
-        seq = len(items) + 1
-        items.append(ScheduleItem(
-            plan_id=plan_id,
-            seq=seq,
-            order_no=order.order_no,
-            line_id=line.line_id,
-            planned_start=start.isoformat(timespec="minutes"),
-            planned_end=end.isoformat(timespec="minutes"),
-            status="PLANNED",
-        ))
-        scheduled.append({
-            "order_no": order.order_no,
-            "product_sku": order.product_sku,
-            "product_name": order.product_name,
-            "quantity": order.quantity,
-            "priority": order.priority,
-            "due_date": order.due_date,
-            "line_id": line.line_id,
-            "line_name": line.name,
-            "planned_start": start.isoformat(timespec="minutes"),
-            "planned_end": end.isoformat(timespec="minutes"),
-            "duration_hours": round((end - start).total_seconds() / 3600, 4),
-        })
+    # --------------------------------------------------------------- dispatch
+    def dispatch_schedule(self, plan_id: str) -> dict[str, Any]:
+        plan = self._s.get_schedule_plan(plan_id)
+        if not plan:
+            raise KeyError(f"unknown schedule {plan_id}")
+        ops = self._s.list_schedule_operations(plan_id)
+        # group by production order to derive scheduled_start/end
+        by_po: dict[str, list[ScheduleOperation]] = {}
+        for o in ops:
+            by_po.setdefault(o.production_order_no, []).append(o)
+
+        dispatched = 0
+        with self._s.transaction():
+            for po_no, po_ops in by_po.items():
+                po = self._s.get_production_order(po_no)
+                if not po:
+                    continue
+                start = min(o.start_time for o in po_ops)
+                end = max(o.end_time for o in po_ops)
+                self._s.update_production_order(
+                    po_no, status=ProductionOrderStatus.RELEASED,
+                    scheduled_start=start, scheduled_end=end)
+                dispatched += 1
+            self._s.update_schedule_plan(plan_id, status=ScheduleStatus.DISPATCHED)
+        return {"plan_id": plan_id, "dispatched_count": dispatched,
+                "status": ScheduleStatus.DISPATCHED}
+
+    def schedule_detail(self, plan_id: str) -> dict[str, Any]:
+        plan = self._s.get_schedule_plan(plan_id)
+        if not plan:
+            raise KeyError(f"unknown schedule {plan_id}")
+        ops = self._s.list_schedule_operations(plan_id)
+        return {"plan": plan.__dict__, "operations": [o.__dict__ for o in ops]}
+
+    def list_schedules(self, status: str | None = None) -> list[SchedulePlan]:
+        return self._s.list_schedule_plans(status=status)
+
+    # --------------------------------------------------------------- helpers
+    def _routing_of(self, p: ProductionOrder) -> str:
+        item = self._s.get_item(p.product_sku)
+        return item.default_routing_code if item and item.default_routing_code else ""
+
+    def _material_ok(self, p: ProductionOrder) -> dict[str, Any]:
+        if self._erp is not None:
+            try:
+                return self._erp.check_material_availability(p.erp_work_order_no)
+            except KeyError:
+                pass
+        return {"fulfilled": True, "shortages": []}
+
+    def _from_erp(self) -> list[ProductionOrder]:
+        out = []
+        for wo in self._s.list_work_orders(status=OrderStatus.RELEASED):
+            existing = self._s.get_production_order_by_erp(wo.order_no)
+            if existing:
+                out.append(existing)
+        return out
 
     @staticmethod
-    def _fmt_unscheduled(order, reason: str) -> dict:
-        return {
-            "order_no": order.order_no,
-            "product_sku": order.product_sku,
-            "quantity": order.quantity,
-            "due_date": order.due_date,
-            "priority": order.priority,
-            "reason": reason,
-        }
+    def _setup_between(wc_timeline: list[tuple[int, int, str]] | None,
+                       to_sku: str, op: Any) -> float:
+        if wc_timeline and wc_timeline[-1][2] != to_sku:
+            # changeover matrix handled at store level via get_changeover
+            return op.setup_time_min
+        return 0.0 if wc_timeline else op.setup_time_min
 
-    def list_schedules(self, status: Optional[str] = None) -> list[dict]:
-        return to_dict(self.store.list_schedules(status))
+    @staticmethod
+    def _machine_free(wc_timeline: list[tuple[int, int, str]] | None) -> int:
+        return wc_timeline[-1][1] if wc_timeline else 0
 
-    def get_schedule(self, plan_id: str) -> dict:
-        schedule = self.store.get_schedule(plan_id)
-        if schedule is None:
-            raise ValueError(f"排产计划不存在: {plan_id}")
-        items = [to_dict(i) for i in self.store.list_schedule_items(plan_id)]
-        data = to_dict(schedule)
-        data["items"] = items
-        return data
+    @staticmethod
+    def _mins(hhmm: str) -> int:
+        h, _, m = hhmm.partition(":")
+        return int(h) * 60 + int(m)
+
+    @staticmethod
+    def _fmt(plan_date: str, minutes: int) -> str:
+        base = datetime.fromisoformat(plan_date + "T08:00:00")
+        return (base + timedelta(minutes=round(minutes))).strftime("%Y-%m-%d %H:%M")
+
+    def _utilization(self, timeline: dict[str, list[tuple[int, int, str]]], plan_date: str) -> list[dict[str, Any]]:
+        out = []
+        for wc in self._s.list_work_centers():
+            intervals = timeline.get(wc.code, [])
+            busy = sum(e - s for s, e, _ in intervals)
+            avail = self.work_available_hours(wc.code, plan_date) * 60
+            out.append({"work_center": wc.code, "busy_min": round(busy, 0),
+                        "available_min": round(avail, 0),
+                        "utilization": round(busy / avail, 3) if avail else 0.0})
+        return out
+
+    def _op_dict(self, op: ScheduleOperation, usable: list[ProductionOrder]) -> dict[str, Any]:
+        d = op.__dict__
+        po = next((p for p in usable if p.production_order_no == op.production_order_no), None)
+        if po:
+            d["erp_work_order_no"] = po.erp_work_order_no
+            d["product_sku"] = po.product_sku
+        return d

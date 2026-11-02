@@ -1,101 +1,112 @@
-"""Pydantic input models for MCP tools (strict, ``extra="forbid"``).
+"""Strict Pydantic input models for mutating tools.
 
-Mirrors the Kingdee MCP pattern: every write tool and every query filter has
-a dedicated model so the MCP handshake itself enforces types, ranges, and
-rejects unknown fields before any business logic runs.
+Every field is validated and unknown fields are rejected (``extra="forbid"``)
+so a malformed or spoofed payload fails loudly at the protocol boundary rather
+than being silently coerced.  This mirrors the per-endpoint request schemas of
+production ERP/MES MCP servers (Odoo's ``schemas.py``, Kingdee's 75 Pydantic
+models).
 """
 from __future__ import annotations
+
+from datetime import date
+from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class StrictModel(BaseModel):
+class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-# -- query / pagination -------------------------------------------------------
-class QueryFilter(StrictModel):
-    status: str | None = Field(default=None, description="按状态过滤")
-    keyword: str | None = Field(default=None, description="关键字模糊匹配")
-    limit: int = Field(default=25, ge=1, le=200, description="返回条数上限")
-    offset: int = Field(default=0, ge=0, description="分页偏移")
+class ItemCreate(_Strict):
+    sku: str = Field(..., min_length=2)
+    name: str
+    item_type: str = Field(..., pattern="^(FINISHED|SEMI|RAW|CONSUMABLE|TOOLING)$")
+    unit: str = "PC"
+    lead_time_days: int = Field(1, ge=0)
+    safety_stock: float = Field(0.0, ge=0)
+    abc_class: str = Field("C", pattern="^(A|B|C)$")
+    default_bom_code: Optional[str] = None
+    default_routing_code: Optional[str] = None
 
 
-# -- work order ---------------------------------------------------------------
-class WorkOrderCreate(StrictModel):
-    order_no: str = Field(description="工单号（唯一）")
-    product_sku: str = Field(description="产品 SKU")
-    product_name: str = Field(description="产品名称")
-    quantity: int = Field(ge=1, le=1_000_000, description="数量")
-    priority: int = Field(default=1, ge=1, le=9, description="优先级，数字越小越优先")
-    due_date: str = Field(description="交期 YYYY-MM-DD")
-    customer: str = Field(default="", description="客户")
+class WorkOrderCreate(_Strict):
+    order_no: str = Field(..., min_length=3)
+    product_sku: str
+    quantity: int = Field(..., gt=0)
+    due_date: str
+    priority: str = Field("NORMAL", pattern="^(CRITICAL|HIGH|NORMAL|LOW)$")
+    customer: str = ""
+    sales_order_no: Optional[str] = None
 
 
-class WorkOrderUpdate(StrictModel):
-    order_no: str = Field(description="工单号")
-    quantity: int | None = Field(default=None, ge=1, le=1_000_000, description="数量")
-    priority: int | None = Field(default=None, ge=1, le=9, description="优先级")
-    due_date: str | None = Field(default=None, description="交期 YYYY-MM-DD")
-    customer: str | None = Field(default=None, description="客户")
+class SalesOrderLineCreate(_Strict):
+    item_sku: str
+    quantity: int = Field(..., gt=0)
+    unit_price: float = 0.0
+    seq: Optional[int] = None
 
 
-class WorkOrderRelease(StrictModel):
-    order_no: str = Field(description="要发布的工单号")
+class SalesOrderCreate(_Strict):
+    order_no: str = Field(..., min_length=3)
+    customer_id: str
+    due_date: str
+    priority: str = Field("NORMAL", pattern="^(CRITICAL|HIGH|NORMAL|LOW)$")
+    lines: list[SalesOrderLineCreate] = Field(..., min_length=1)
+    order_date: Optional[str] = None
 
 
-class OrderNosInput(StrictModel):
-    order_nos: list[str] | None = Field(default=None, description="工单号列表，缺省表示全部")
+class PurchaseOrderLineCreate(_Strict):
+    item_sku: str
+    quantity: float = Field(..., gt=0)
+    seq: Optional[int] = None
 
 
-# -- material ---------------------------------------------------------------
-class MaterialCreate(StrictModel):
-    sku: str = Field(description="物料 SKU（唯一）")
-    name: str = Field(description="物料名称")
-    unit: str = Field(default="pcs", description="计量单位")
-    stock_qty: float = Field(default=0.0, ge=0.0, description="初始库存")
+class PurchaseOrderCreate(_Strict):
+    po_no: str = Field(..., min_length=3)
+    supplier: str
+    due_date: str
+    lines: list[PurchaseOrderLineCreate] = Field(..., min_length=1)
 
 
-class MaterialUpdate(StrictModel):
-    sku: str = Field(description="物料 SKU")
-    name: str | None = Field(default=None, description="物料名称")
-    stock_qty: float | None = Field(default=None, ge=0.0, description="库存调整后的值")
+class InventoryAdjust(_Strict):
+    sku: str
+    lot_no: str
+    delta_on_hand: float
+    delta_reserved: float = 0.0
 
 
-# -- production line ----------------------------------------------------------
-class ProductionLineUpdate(StrictModel):
-    line_id: str = Field(description="产线编号")
-    status: str = Field(description="IDLE / BUSY / MAINTENANCE")
+class ReportProgress(_Strict):
+    production_order_no: str
+    operation_no: int = Field(..., ge=0)
+    qty_good: int = Field(..., ge=0)
+    qty_bad: int = Field(0, ge=0)
+    complete: bool = False
 
 
-# -- production task ----------------------------------------------------------
-class ProductionTaskUpdate(StrictModel):
-    task_id: str = Field(description="任务编号")
+class ReportDowntime(_Strict):
+    work_center: str
+    reason: str = Field(..., pattern="^(BREAKDOWN|MAINTENANCE|SETUP|MATERIAL_SHORTAGE|QUALITY_STOP|IDLE)$")
+    start_time: str
+    end_time: Optional[str] = None
 
 
-class ReportProgressInput(StrictModel):
-    task_id: str = Field(description="任务编号")
-    actual_qty: int = Field(ge=0, description="实际产量")
-    complete: bool = Field(default=False, description="是否完工")
+class QualityInspect(_Strict):
+    production_order_no: str
+    operation_no: int = Field(..., ge=0)
+    sample_qty: int = Field(..., ge=0)
+    defect_qty: int = Field(0, ge=0)
+    disposition: str = Field(..., pattern="^(PASS|REWORK|SCRAP|CONCESSION)$")
+    inspector: str = ""
 
 
-# -- scheduling ---------------------------------------------------------------
-class PlanFilter(StrictModel):
-    status: str | None = Field(default=None, description="DRAFT / DISPATCHED")
+class MaterialIssue(_Strict):
+    production_order_no: str
+    item_sku: str
+    quantity: float = Field(..., gt=0)
 
 
-class PlanIdInput(StrictModel):
-    plan_id: str = Field(description="排产计划编号")
-
-
-class ScheduleGenerateInput(StrictModel):
-    plan_date: str | None = Field(default=None, description="排产日期 YYYY-MM-DD，缺省今天")
-
-
-class CapacityQueryInput(StrictModel):
-    plan_date: str | None = Field(default=None, description="排产日期 YYYY-MM-DD，缺省今天")
-
-
-# -- discovery ----------------------------------------------------------------
-class ResourceSchemaInput(StrictModel):
-    resource: str = Field(description="资源名，如 work_order / material / production_line")
+class ScheduleGenerate(_Strict):
+    plan_date: Optional[date] = None
+    horizon_days: int = Field(1, ge=1, le=30)
+    objective: str = Field("on-time delivery")

@@ -1,8 +1,6 @@
 import pytest
 
-from mes_scheduling_mcp.erp import ERPService
-from mes_scheduling_mcp.mes import MESService
-from mes_scheduling_mcp.scheduling import SchedulingService
+from mes_scheduling_mcp.backend import ManufacturingBackend
 from mes_scheduling_mcp.store import Store
 
 
@@ -14,15 +12,25 @@ def store():
 
 
 @pytest.fixture()
-def erp(store):
-    return ERPService(store)
+def backend(store):
+    return ManufacturingBackend(store)
 
 
 @pytest.fixture()
-def sched(store):
-    return SchedulingService(store)
+def erp(backend):
+    return backend.erp
 
 
 @pytest.fixture()
-def mes(store):
-    return MESService(store)
+def mes(backend):
+    return backend.mes
+
+
+@pytest.fixture()
+def aps(backend):
+    return backend.aps
+
+
+@pytest.fixture()
+def sched(backend):
+    return backend.aps

@@ -95,7 +95,7 @@
     </div>
 
     <div class="card">
-      <h2>MCP 工具清单（16 个）</h2>
+      <h2>MCP 工具清单（54 个）</h2>
       <table id="toolTable">
         <thead><tr><th>工具</th><th>分组</th><th>说明</th></tr></thead>
         <tbody></tbody>
@@ -145,10 +145,10 @@
 
     function renderMetrics(health) {
       const m = [
-        ['工单数', health.work_orders],
-        ['生产任务', health.production_tasks],
-        ['产线', health.lines],
-        ['忙碌产线', health.lines_busy],
+        ['工单数', health.erp.work_orders],
+        ['生产订单', health.mes.production_orders],
+        ['产线数', health.mes.work_centers],
+        ['待发事件', health.outbox_pending],
       ];
       $('#metrics').innerHTML = m.map(([l, n]) => `<div class="metric"><div class="num">${n}</div><div class="label">${l}</div></div>`).join('');
     }

@@ -14,37 +14,57 @@ from .auth import Subject
 from .errors import AccessDeniedError
 
 # resource -> operation -> set of roles allowed to perform it
+_ALL = {"admin", "scheduler", "operator", "viewer"}
 ACCESS_MATRIX: dict[str, dict[str, set[str]]] = {
     "work_order": {
-        "read": {"admin", "scheduler", "operator", "viewer"},
+        "read": _ALL,
         "create": {"admin", "scheduler"},
         "update": {"admin", "scheduler"},
         "release": {"admin", "scheduler"},
     },
-    "material": {
-        "read": {"admin", "scheduler", "operator", "viewer"},
+    "item": {
+        "read": _ALL,
         "create": {"admin"},
         "update": {"admin", "scheduler"},
     },
-    "production_line": {
-        "read": {"admin", "scheduler", "operator", "viewer"},
+    "sales_order": {
+        "read": _ALL,
+        "create": {"admin", "scheduler"},
+    },
+    "purchase_order": {
+        "read": _ALL,
+        "create": {"admin", "scheduler"},
+    },
+    "inventory": {
+        "read": _ALL,
         "update": {"admin", "scheduler"},
     },
-    "production_task": {
-        "read": {"admin", "scheduler", "operator", "viewer"},
+    "work_center": {
+        "read": _ALL,
         "update": {"admin", "scheduler", "operator"},
+    },
+    "routing": {
+        "read": _ALL,
+    },
+    "production_order": {
+        "read": _ALL,
+        "update": {"admin", "scheduler"},
         "report": {"admin", "scheduler", "operator"},
+        "inspect": {"operator", "admin"},
+        "issue": {"admin", "scheduler", "operator"},
     },
     "schedule": {
-        "read": {"admin", "scheduler", "operator", "viewer"},
+        "read": _ALL,
         "create": {"admin", "scheduler"},
         "dispatch": {"admin", "scheduler"},
     },
-    "process_routing": {
-        "read": {"admin", "scheduler", "operator", "viewer"},
+    "integration": {
+        "read": {"admin", "scheduler"},
+        "sync": {"admin", "scheduler"},
+        "reconcile": {"admin", "scheduler"},
     },
     "system": {
-        "read": {"admin", "scheduler", "operator", "viewer"},
+        "read": _ALL,
         "reset": {"admin"},
     },
 }
