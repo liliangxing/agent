@@ -31,7 +31,7 @@ async def _tool_names(session):
 async def test_list_tools_over_stdio():
     async for session in _session():
         names = await _tool_names(session)
-        assert len(names) == len(tool_catalog.TOOLS) == 60
+        assert len(names) == len(tool_catalog.TOOLS) == 73
         assert names == {t["name"] for t in tool_catalog.TOOLS}
         for expect in (
             "erp_list_work_orders",

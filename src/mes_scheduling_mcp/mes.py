@@ -7,8 +7,10 @@ backflushing.  Execution feedback is published back to ERP via the outbox.
 """
 from __future__ import annotations
 
+import math
+import statistics
 from dataclasses import asdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Optional
 
 from .errors import ValidationError
@@ -25,8 +27,12 @@ from .models import (
     OperationStatus,
     ProductionOrder,
     ProductionOrderStatus,
+    ProductionRun,
     QualityDisposition,
     QualityRecord,
+    RunStatus,
+    TestRecord,
+    TestResult,
     WorkCenter,
     WorkCenterStatus,
     WorkOrder,
@@ -97,6 +103,53 @@ class MESService:
 
     def list_quality_records(self, production_order_no: str | None = None) -> list[QualityRecord]:
         return self._s.list_quality_records(production_order_no=production_order_no)
+
+    def list_tests(self, production_order_no: str | None = None,
+                   result: str | None = None) -> list[TestRecord]:
+        return self._s.list_tests(production_order_no=production_order_no, result=result)
+
+    def list_runs(self, production_order_no: str | None = None,
+                  work_center: str | None = None,
+                  status: str | None = None) -> list[ProductionRun]:
+        return self._s.list_runs(production_order_no=production_order_no,
+                                 work_center=work_center, status=status)
+
+    def get_run(self, run_no: str) -> ProductionRun:
+        run = self._s.get_run(run_no)
+        if not run:
+            raise KeyError(f"unknown run {run_no}")
+        return run
+
+    def get_work_instructions(self, production_order_no: str,
+                              operation_no: int | None = None) -> dict[str, Any]:
+        po = self.get_production_order(production_order_no)
+        item = self._s.get_item(po.product_sku)
+        routing_code = item.default_routing_code if item else None
+        ops = self._s.list_routing_operations(routing_code=routing_code)
+        progress = {o.operation_no: o for o in self.list_operations(production_order_no)}
+        selected = [op for op in ops if operation_no is None or op.operation_no == operation_no]
+        if not selected:
+            raise KeyError(f"routing operation {operation_no} not found for {production_order_no}")
+        return {
+            "production_order_no": production_order_no,
+            "product_sku": po.product_sku,
+            "routing_code": routing_code,
+            "operations": [
+                {
+                    "operation_no": op.operation_no,
+                    "operation_name": op.operation_name,
+                    "work_center": op.work_center,
+                    "tooling": op.tooling,
+                    "setup_time_min": op.setup_time_min,
+                    "run_time_min_per_unit": op.run_time_min_per_unit,
+                    "inspection_required": op.inspection_required,
+                    "instructions": op.instructions,
+                    "status": str(progress[op.operation_no].status)
+                    if op.operation_no in progress else "PENDING",
+                }
+                for op in selected
+            ],
+        }
 
     def create_production_order(self, work_order: WorkOrder) -> ProductionOrder:
         """Create the MES counterpart of a released ERP work order."""
@@ -208,34 +261,159 @@ class MESService:
                                        status=WorkCenterStatus.BREAKDOWN if reason == "BREAKDOWN" else WorkCenterStatus.MAINTENANCE)
         return asdict(event)
 
-    def oee_report(self, work_center: str) -> dict[str, Any]:
-        self.get_work_center(work_center)
-        events = self._s.list_downtime(work_center=work_center)
-        downtime_min = sum(e.duration_min for e in events)
-        # availability against an 8h shift window
-        availability = round(max(0.0, 1 - downtime_min / (8 * 60)), 3)
-        # performance / quality are placeholders computed from recorded data where available
-        quality_records = [q for q in self._s.list_quality_records()
-                           if q.production_order_no]  # plant-level simplification
-        quality = 1.0
-        if quality_records:
-            total = sum(q.sample_qty for q in quality_records)
-            defects = sum(q.defect_qty for q in quality_records)
-            quality = round(1 - defects / total, 3) if total else 1.0
-        # performance from completed quantities vs capacity
-        performance = 0.9
-        oee = round(availability * performance * quality, 3)
-        return {"work_center": work_center, "availability": availability,
-                "performance": performance, "quality": quality, "oee": oee,
-                "downtime_min": round(downtime_min, 1)}
+    # --------------------------------------------------------------- runs / OEE
+    def start_run(self, production_order_no: str, operation_no: int,
+                  planned_minutes: float | None = None,
+                  ideal_cycle_sec: float | None = None) -> dict[str, Any]:
+        po = self.get_production_order(production_order_no)
+        item = self._s.get_item(po.product_sku)
+        routing_code = item.default_routing_code if item else None
+        op = self._s.get_routing_operation(routing_code, operation_no) if routing_code else None
+        if not op:
+            raise KeyError(f"routing operation {operation_no} not found for {production_order_no}")
+        self.get_work_center(op.work_center)
+        active = self._s.list_runs(work_center=op.work_center, status=str(RunStatus.RUNNING))
+        if active:
+            raise ValidationError(
+                f"{op.work_center} 已有运行中的报工 {active[0].run_no}，请先结束或转移")
+        if planned_minutes is None:
+            planned_minutes = round(op.setup_time_min + op.run_time_min_per_unit * po.quantity, 1)
+        if ideal_cycle_sec is None:
+            ideal_cycle_sec = round(op.run_time_min_per_unit * 60, 1)
+        if planned_minutes <= 0:
+            raise ValidationError("planned_minutes must be positive")
+        run = ProductionRun(
+            run_no=new_id("RUN-", 10), production_order_no=production_order_no,
+            operation_no=operation_no, work_center=op.work_center,
+            planned_minutes=planned_minutes, ideal_cycle_sec=ideal_cycle_sec)
+        with self._s.transaction():
+            self._s.insert_run(run)
+            self._s.update_work_center(op.work_center, status=WorkCenterStatus.RUNNING,
+                                       current_production_order=production_order_no)
+            if po.status in (ProductionOrderStatus.DRAFT, ProductionOrderStatus.RELEASED):
+                self._s.update_production_order(production_order_no,
+                                                status=ProductionOrderStatus.IN_PROCESS)
+            current = self._s.list_operation_progress(production_order_no=production_order_no)
+            existing = next((o for o in current if o.operation_no == operation_no), None)
+            if existing and existing.status in (OperationStatus.PENDING, OperationStatus.SETUP):
+                self._s.update_operation_progress(
+                    production_order_no, operation_no, status=OperationStatus.RUNNING,
+                    started_at=existing.started_at or _now())
+            self._audit("start_run", "production_run", run.run_no, None, _snapshot(run))
+        return asdict(run)
+
+    def log_run_output(self, run_no: str, qty_good: int, qty_scrap: int = 0) -> dict[str, Any]:
+        run = self.get_run(run_no)
+        if run.status == RunStatus.ENDED:
+            raise ValidationError(f"run {run_no} already ended")
+        if qty_good < 0 or qty_scrap < 0:
+            raise ValidationError("qty_good/qty_scrap must be non-negative")
+        with self._s.transaction():
+            self._s.update_run(run_no, qty_good=run.qty_good + qty_good,
+                               qty_scrap=run.qty_scrap + qty_scrap)
+            ops = self._s.list_operation_progress(production_order_no=run.production_order_no)
+            op = next((o for o in ops if o.operation_no == run.operation_no), None)
+            if op:
+                self._s.update_operation_progress(
+                    run.production_order_no, run.operation_no,
+                    qty_good=op.qty_good + qty_good, qty_bad=op.qty_bad + qty_scrap)
+        updated = self.get_run(run_no)
+        return asdict(updated)
+
+    def log_run_downtime(self, run_no: str, reason: str, minutes: float,
+                         planned: bool = False, start_time: str | None = None) -> dict[str, Any]:
+        run = self.get_run(run_no)
+        if minutes <= 0:
+            raise ValidationError("minutes must be positive")
+        start = datetime.fromisoformat(start_time) if start_time else datetime.now()
+        event = DowntimeEvent(
+            event_id=new_id("DT-", 10), work_center=run.work_center,
+            reason=DowntimeReason(reason), start_time=start.isoformat(timespec="seconds"),
+            end_time=(start + timedelta(minutes=minutes)).isoformat(timespec="seconds"),
+            duration_min=round(minutes, 1), run_no=run_no, planned=planned)
+        with self._s.transaction():
+            self._s.insert_downtime(event)
+            if planned:
+                status = WorkCenterStatus.MAINTENANCE if reason in ("MAINTENANCE", "SETUP") else WorkCenterStatus.IDLE
+            else:
+                status = WorkCenterStatus.BREAKDOWN if reason == "BREAKDOWN" else WorkCenterStatus.MAINTENANCE
+            self._s.update_work_center(run.work_center, status=status)
+        return asdict(event)
+
+    def end_run(self, run_no: str) -> dict[str, Any]:
+        run = self.get_run(run_no)
+        if run.status == RunStatus.ENDED:
+            return asdict(run)
+        with self._s.transaction():
+            self._s.update_run(run_no, status=RunStatus.ENDED, ended_at=_now())
+            self._s.update_work_center(run.work_center, status=WorkCenterStatus.IDLE,
+                                       current_production_order=None)
+            self._audit("end_run", "production_run", run_no, _snapshot(run), None)
+        return asdict(self.get_run(run_no))
+
+    def oee_report(self, work_center: str | None = None,
+                   run_no: str | None = None,
+                   production_order_no: str | None = None) -> dict[str, Any]:
+        if work_center:
+            self.get_work_center(work_center)
+        if run_no:
+            runs = [self.get_run(run_no)]
+        else:
+            runs = self._s.list_runs(work_center=work_center,
+                                     production_order_no=production_order_no)
+        planned_prod = 0.0
+        run_time = 0.0
+        planned_dt = 0.0
+        unplanned_dt = 0.0
+        ideal_minutes = 0.0
+        good = 0
+        scrap = 0
+        for run in runs:
+            events = self._s.list_downtime(run_no=run.run_no)
+            run_planned_dt = sum(e.duration_min for e in events if e.planned)
+            run_unplanned_dt = sum(e.duration_min for e in events if not e.planned)
+            window = max(0.0, run.planned_minutes - run_planned_dt)
+            planned_prod += window
+            run_time += max(0.0, window - run_unplanned_dt)
+            planned_dt += run_planned_dt
+            unplanned_dt += run_unplanned_dt
+            total = run.qty_good + run.qty_scrap
+            ideal_minutes += run.ideal_cycle_sec * total / 60.0
+            good += run.qty_good
+            scrap += run.qty_scrap
+        availability = run_time / planned_prod if planned_prod > 0 else 0.0
+        performance = min(1.0, ideal_minutes / run_time) if run_time > 0 else 0.0
+        quality = good / (good + scrap) if (good + scrap) > 0 else 0.0
+        oee = availability * performance * quality
+        return {
+            "work_center": work_center,
+            "run_no": run_no,
+            "production_order_no": production_order_no,
+            "runs": len(runs),
+            "availability": round(availability, 3),
+            "performance": round(performance, 3),
+            "quality": round(quality, 3),
+            "oee": round(oee, 3),
+            "planned_minutes": round(planned_prod, 1),
+            "run_minutes": round(run_time, 1),
+            "planned_downtime_min": round(planned_dt, 1),
+            "unplanned_downtime_min": round(unplanned_dt, 1),
+            "downtime_min": round(planned_dt + unplanned_dt, 1),
+            "good": good,
+            "scrap": scrap,
+        }
 
     # ------------------------------------------------------------- quality
     def quality_inspect(self, production_order_no: str, operation_no: int, sample_qty: int,
-                        defect_qty: int, disposition: str, inspector: str = "") -> dict[str, Any]:
+                        defect_qty: int, disposition: str, inspector: str = "",
+                        defect_code: str = "", defect_desc: str = "",
+                        unit_ref: str = "", station: str = "") -> dict[str, Any]:
         record = QualityRecord(
             record_no=new_id("QC-", 10), production_order_no=production_order_no,
             operation_no=operation_no, sample_qty=sample_qty, defect_qty=defect_qty,
-            disposition=QualityDisposition(disposition), inspector=inspector)
+            disposition=QualityDisposition(disposition), defect_code=defect_code,
+            defect_desc=defect_desc, unit_ref=unit_ref, station=station,
+            inspector=inspector)
         with self._s.transaction():
             self._s.insert_quality_record(record)
             if self._itg:
@@ -244,6 +422,169 @@ class MESService:
                     resource="quality", resource_id=record.record_no, correlation_id="",
                     before={"op": operation_no}, after=_snapshot(record))
         return asdict(record)
+
+    def record_test(self, production_order_no: str, operation_no: int, unit_ref: str,
+                    result: str, station: str = "", defect_code: str = "",
+                    defect_desc: str = "", characteristic: str = "",
+                    nominal: float | None = None, tolerance: float | None = None,
+                    measured: float | None = None, inspector: str = "") -> dict[str, Any]:
+        self.get_production_order(production_order_no)
+        if result not in ("PASS", "FAIL"):
+            raise ValidationError("result must be PASS or FAIL")
+        if result == "FAIL" and not defect_code:
+            defect_code = "UNSPECIFIED"
+        record = TestRecord(
+            test_no=new_id("TST-", 10), production_order_no=production_order_no,
+            operation_no=operation_no, unit_ref=unit_ref, station=station,
+            result=TestResult(result), defect_code=defect_code, defect_desc=defect_desc,
+            characteristic=characteristic, nominal=nominal, tolerance=tolerance,
+            measured=measured, inspector=inspector)
+        with self._s.transaction():
+            self._s.insert_test(record)
+            if result == "FAIL":
+                self._audit("test_fail", "test_record", record.test_no, None, _snapshot(record))
+        return asdict(record)
+
+    def yield_report(self, production_order_no: str | None = None) -> dict[str, Any]:
+        tests = self._s.list_tests(production_order_no=production_order_no)
+        total = len(tests)
+        passed = sum(1 for t in tests if t.result == TestResult.PASS)
+        failed = total - passed
+        pareto: dict[str, dict[str, Any]] = {}
+        for t in tests:
+            if t.result != TestResult.FAIL:
+                continue
+            key = t.defect_code or "UNSPECIFIED"
+            item = pareto.setdefault(key, {"defect_code": key, "count": 0,
+                                           "description": t.defect_desc})
+            item["count"] += 1
+        pareto_rows = sorted(pareto.values(), key=lambda x: (-x["count"], x["defect_code"]))
+        for row in pareto_rows:
+            row["share"] = round(row["count"] / failed, 3) if failed else 0.0
+        quality_records = self._s.list_quality_records(production_order_no=production_order_no)
+        inspected = sum(q.sample_qty for q in quality_records)
+        defects = sum(q.defect_qty for q in quality_records)
+        rework = sum(q.defect_qty for q in quality_records if q.disposition == QualityDisposition.REWORK)
+        scrap = sum(q.defect_qty for q in quality_records if q.disposition == QualityDisposition.SCRAP)
+        return {
+            "production_order_no": production_order_no,
+            "tested": total,
+            "passed": passed,
+            "failed": failed,
+            "first_pass_yield": round(passed / total, 3) if total else 0.0,
+            "defect_rate": round(failed / total, 3) if total else 0.0,
+            "defect_pareto": pareto_rows,
+            "inspection_samples": inspected,
+            "inspection_defects": defects,
+            "rework_samples": rework,
+            "scrap_samples": scrap,
+        }
+
+    def spc_report(self, characteristic: str | None = None,
+                   production_order_no: str | None = None) -> dict[str, Any]:
+        tests = [t for t in self._s.list_tests(production_order_no=production_order_no)
+                 if t.measured is not None and t.characteristic]
+        groups: dict[str, list[TestRecord]] = {}
+        for t in tests:
+            if characteristic and t.characteristic != characteristic:
+                continue
+            groups.setdefault(t.characteristic, []).append(t)
+        rows: list[dict[str, Any]] = []
+        for name, records in groups.items():
+            values = [float(t.measured) for t in records if t.measured is not None]
+            if not values:
+                continue
+            nominal = next((t.nominal for t in records if t.nominal is not None), None)
+            tolerance = next((t.tolerance for t in records if t.tolerance is not None), None)
+            mean = statistics.fmean(values)
+            sigma = statistics.stdev(values) if len(values) > 1 else 0.0
+            lsl = nominal - tolerance if nominal is not None and tolerance is not None else None
+            usl = nominal + tolerance if nominal is not None and tolerance is not None else None
+            cp = ((usl - lsl) / (6 * sigma)) if lsl is not None and usl is not None and sigma > 0 else None
+            cpk = None
+            if lsl is not None and usl is not None and sigma > 0:
+                cpk = min(usl - mean, mean - lsl) / (3 * sigma)
+            out_of_spec = sum(1 for v in values
+                              if (lsl is not None and v < lsl) or (usl is not None and v > usl))
+            rows.append({
+                "characteristic": name,
+                "n": len(values),
+                "nominal": nominal,
+                "tolerance": tolerance,
+                "lsl": lsl,
+                "usl": usl,
+                "mean": round(mean, 4),
+                "stdev": round(sigma, 4),
+                "min": round(min(values), 4),
+                "max": round(max(values), 4),
+                "cp": round(cp, 3) if cp is not None else None,
+                "cpk": round(cpk, 3) if cpk is not None else None,
+                "out_of_spec": out_of_spec,
+            })
+        rows.sort(key=lambda x: x["characteristic"])
+        return {"characteristic": characteristic,
+                "production_order_no": production_order_no,
+                "characteristics": rows}
+
+    def recall_report(self, lot_no: str, max_depth: int = 10) -> dict[str, Any]:
+        trace = self.trace_lot(lot_no, direction="down", max_depth=max_depth)
+        affected: dict[str, dict[str, Any]] = {}
+        for edge in trace["children"]:
+            po_no = edge["production_order_no"]
+            if not po_no:
+                continue
+            po = self._s.get_production_order(po_no)
+            if not po:
+                continue
+            wo = self._s.get_work_order(po.erp_work_order_no)
+            so = self._s.get_sales_order(wo.sales_order_no) if wo and wo.sales_order_no else None
+            customer = self._s.get_customer(so.customer_id) if so else None
+            item = {
+                "production_order_no": po_no,
+                "erp_work_order_no": po.erp_work_order_no,
+                "product_sku": po.product_sku,
+                "product_name": po.product_name,
+                "quantity": po.quantity,
+                "status": str(po.status),
+                "output_lot": f"LOT-{po_no}",
+                "sales_order_no": wo.sales_order_no if wo else None,
+                "customer": customer.name if customer else (wo.customer if wo else ""),
+                "customer_id": customer.customer_id if customer else None,
+            }
+            affected[po_no] = item
+        for consumption in self._s.list_consumptions():
+            if consumption.lot_no != lot_no:
+                continue
+            po = self._s.get_production_order(consumption.production_order_no)
+            if not po or po.production_order_no in affected:
+                continue
+            wo = self._s.get_work_order(po.erp_work_order_no)
+            so = self._s.get_sales_order(wo.sales_order_no) if wo and wo.sales_order_no else None
+            customer = self._s.get_customer(so.customer_id) if so else None
+            affected[po.production_order_no] = {
+                "production_order_no": po.production_order_no,
+                "erp_work_order_no": po.erp_work_order_no,
+                "product_sku": po.product_sku,
+                "product_name": po.product_name,
+                "quantity": po.quantity,
+                "status": str(po.status),
+                "output_lot": f"LOT-{po.production_order_no}",
+                "sales_order_no": wo.sales_order_no if wo else None,
+                "customer": customer.name if customer else (wo.customer if wo else ""),
+                "customer_id": customer.customer_id if customer else None,
+            }
+        orders = sorted(affected.values(), key=lambda x: x["production_order_no"])
+        customers = sorted({o["customer"] for o in orders if o["customer"]})
+        return {
+            "lot_no": lot_no,
+            "direction": "down",
+            "affected_orders": orders,
+            "affected_order_count": len(orders),
+            "affected_customers": customers,
+            "affected_quantity": sum(o["quantity"] for o in orders),
+            "downstream_lots": trace["downstream_lots"],
+            "links": len(trace["children"]),
+        }
 
     # ------------------------------------------------------ material issues
     def issue_material(self, production_order_no: str, item_sku: str, quantity: float) -> dict[str, Any]:

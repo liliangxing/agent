@@ -249,10 +249,25 @@ class ERPService:
         return wo
 
     def release_work_order(self, order_no: str) -> dict[str, Any]:
-        """Release a work order, announcing it to MES via the outbox."""
+        """Release a work order, announcing it to MES via the outbox.
+
+        Release is gated on engineering master data: a BOM and a routing with
+        every operation assigned to a known work center.  Material readiness is
+        reported alongside the release so planners can see kit gaps without
+        blocking the ERP handoff.
+        """
         wo = self.get_work_order(order_no)
         if wo.status != OrderStatus.DRAFT:
             raise ValueError(f"work order {order_no} is {wo.status}, not DRAFT")
+        if not wo.bom_code or not self._s.get_bom_lines(wo.bom_code):
+            raise ValueError(f"不能发布: 工单 {order_no} 缺少 BOM")
+        ops = self._s.list_routing_operations(routing_code=wo.routing_code) if wo.routing_code else []
+        if not ops:
+            raise ValueError(f"不能发布: 工单 {order_no} 缺少工艺路线")
+        missing_wc = [op.operation_no for op in ops if not self._s.get_work_center(op.work_center)]
+        if missing_wc:
+            raise ValueError(f"不能发布: 工序 {missing_wc} 未分配有效工作中心")
+        kit = self.check_material_availability(order_no)
         before = _snapshot(wo)
         with self._s.transaction():
             self._s.update_work_order(order_no, status=OrderStatus.RELEASED, released_at=_now())
@@ -263,7 +278,9 @@ class ERPService:
                     EventType.ORDER_RELEASE, "work_order", order_no,
                     {"order_no": order_no, "product_sku": wo.product_sku,
                      "quantity": wo.quantity, "due_date": wo.due_date})
-        return {"order_no": order_no, "status": OrderStatus.RELEASED}
+        return {"order_no": order_no, "status": OrderStatus.RELEASED,
+                "operations": len(ops), "kit_ready": kit["fulfilled"],
+                "shortages": kit["shortages"]}
 
     def complete_work_order(self, order_no: str, completed_qty: int | None = None) -> dict[str, Any]:
         wo = self.get_work_order(order_no)
@@ -278,12 +295,33 @@ class ERPService:
         return {"order_no": order_no, "status": OrderStatus.COMPLETED}
 
     def close_work_order(self, order_no: str) -> dict[str, Any]:
+        """Close a completed work order after disposition.
+
+        Gated: only COMPLETED orders with recorded good output can be closed,
+        so an empty or still-running order cannot disappear from WIP.
+        """
         wo = self.get_work_order(order_no)
+        if wo.status != OrderStatus.COMPLETED:
+            raise ValueError(f"不能关闭: 工单 {order_no} 状态为 {wo.status}，需先完工")
+        if (wo.completed_qty or 0) <= 0:
+            raise ValueError(f"不能关闭: 工单 {order_no} 没有合格产出")
         with self._s.transaction():
             self._s.update_work_order(order_no, status=OrderStatus.CLOSED)
             self._audit("close", "work_order", order_no, _snapshot(wo),
                         _snapshot(self._s.get_work_order(order_no)))
-        return {"order_no": order_no, "status": OrderStatus.CLOSED}
+        return {"order_no": order_no, "status": OrderStatus.CLOSED,
+                "completed_qty": wo.completed_qty}
+
+    def cancel_work_order(self, order_no: str, reason: str = "") -> dict[str, Any]:
+        """Cancel a work order with a reason; closed/cancelled orders are terminal."""
+        wo = self.get_work_order(order_no)
+        if wo.status in (OrderStatus.CLOSED, OrderStatus.CANCELLED):
+            raise ValueError(f"cannot cancel a {wo.status} work order")
+        with self._s.transaction():
+            self._s.update_work_order(order_no, status=OrderStatus.CANCELLED)
+            self._audit("cancel", "work_order", order_no, _snapshot(wo),
+                        {"reason": reason})
+        return {"order_no": order_no, "status": OrderStatus.CANCELLED, "reason": reason}
 
     # ------------------------------------------------------------------- MRP
     def run_mrp(self) -> dict[str, Any]:

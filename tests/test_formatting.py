@@ -38,7 +38,7 @@ def test_character_budget_cuts_rows():
 
 
 def test_catalog_is_classified_and_gateway_is_present():
-    assert len(tool_catalog.TOOLS) == 60
+    assert len(tool_catalog.TOOLS) == 73
     assert tool_catalog.classification("reset_demo_data") == "DESTRUCTIVE"
     assert tool_catalog.classification("erp_list_items") == "READ"
     assert tool_catalog.classification("erp_create_item") == "WRITE"

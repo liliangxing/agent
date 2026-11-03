@@ -97,6 +97,46 @@ class QualityInspect(_Strict):
     sample_qty: int = Field(..., ge=0)
     defect_qty: int = Field(0, ge=0)
     disposition: str = Field(..., pattern="^(PASS|REWORK|SCRAP|CONCESSION)$")
+    defect_code: str = ""
+    defect_desc: str = ""
+    unit_ref: str = ""
+    station: str = ""
+    inspector: str = ""
+
+
+class StartRun(_Strict):
+    production_order_no: str
+    operation_no: int = Field(..., ge=0)
+    planned_minutes: Optional[float] = Field(None, gt=0)
+    ideal_cycle_sec: Optional[float] = Field(None, gt=0)
+
+
+class RunOutput(_Strict):
+    run_no: str
+    qty_good: int = Field(..., ge=0)
+    qty_scrap: int = Field(0, ge=0)
+
+
+class RunDowntime(_Strict):
+    run_no: str
+    reason: str = Field(..., pattern="^(BREAKDOWN|MAINTENANCE|SETUP|MATERIAL_SHORTAGE|QUALITY_STOP|IDLE)$")
+    minutes: float = Field(..., gt=0)
+    planned: bool = False
+    start_time: Optional[str] = None
+
+
+class RecordTest(_Strict):
+    production_order_no: str
+    operation_no: int = Field(..., ge=0)
+    unit_ref: str = Field(..., min_length=1)
+    result: str = Field(..., pattern="^(PASS|FAIL)$")
+    station: str = ""
+    defect_code: str = ""
+    defect_desc: str = ""
+    characteristic: str = ""
+    nominal: Optional[float] = None
+    tolerance: Optional[float] = Field(None, ge=0)
+    measured: Optional[float] = None
     inspector: str = ""
 
 

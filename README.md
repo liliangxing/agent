@@ -12,7 +12,7 @@
 
 生产形态特性（对齐真实开源 ERP/MES MCP 项目的工程实践）：
 
-- **60 个领域 / 集成 / 网关工具**：ERP（工单 / 物料 / BOM / 采购 / MRP）、MES（产线 / 排程 / 报工 / OEE / 质量）、排产（有限产能）、集成（幂等 / 发件箱 / 对账 / 审计），以及系统运维工具
+- **73 个领域 / 集成 / 网关工具**：ERP（工单 / 物料 / BOM / 采购 / MRP）、MES（产线 / 排程 / 报工 / OEE / 质量 / SPC / 召回）、排产（有限产能）、集成（幂等 / 发件箱 / 对账 / 审计），以及系统运维工具
 - **严格入参校验**：Pydantic 模型 `extra="forbid"`，非法字段、缺字段直接报错
 - **鉴权 + RBAC**：API Key 鉴权与「资源 × 操作」访问控制矩阵，默认 fail-closed
 - **观测**：工具调用统计、JSONL 用量日志、错误脱敏
@@ -30,7 +30,7 @@
 
 - [案例背景（01 案例）](#案例背景01-案例)
 - [架构](#架构)
-- [能力清单（60 个工具）](#能力清单60-个工具)
+- [能力清单（73 个工具）](#能力清单73-个工具)
 - [快速开始](#快速开始)
 - [鉴权与访问控制](#鉴权与访问控制)
 - [接入 AI 客户端](#接入-ai-客户端)
@@ -70,7 +70,7 @@ ERP 当日工单  →  齐套检查  →  产能查询  →  自动排产  →  
 ```mermaid
 flowchart LR
     A["AI 排产 Agent"]
-    S["MES Scheduling MCP Server (60 工具)"]
+    S["MES Scheduling MCP Server (73 工具)"]
     B["ManufacturingBackend 门面"]
     ER["ERP 领域 (工单 / 物料 / BOM / 采购 / MRP)"]
     AP["排产引擎 APSService (齐套 + 有限产能 + 换型)"]
@@ -143,9 +143,9 @@ APS 三域与集成工程的统一门面，便于单测与替换成真实 ERP / 
 
 ---
 
-## 能力清单（60 个工具）
+## 能力清单（73 个工具）
 
-### ERP 工具（21 个）
+### ERP 工具（22 个）
 
 | 工具 | 说明 |
 | --- | --- |
@@ -156,11 +156,12 @@ APS 三域与集成工程的统一门面，便于单测与替换成真实 ERP / 
 | `erp_list_sales_orders` / `erp_create_sales_order` | 销售订单查询与新建 |
 | `erp_list_purchase_orders` / `erp_create_purchase_order` / `erp_receive_purchase_order` | 采购订单管理与收货 |
 | `erp_list_work_orders` / `erp_get_work_order` / `erp_create_work_order` | 生产工单查询与新建 |
-| `erp_release_work_order` | 发布工单并广播 `ORDER_RELEASE` 事件 |
-| `erp_complete_work_order` / `erp_close_work_order` | 工单完工 / 关闭 |
+| `erp_release_work_order` | 发布工单并广播 `ORDER_RELEASE` 事件（校验 BOM / 工艺路线 / 工作中心与齐套缺口） |
+| `erp_complete_work_order` / `erp_close_work_order` | 工单完工 / 关闭（关闭校验完工数量，禁止跨状态回退） |
+| `erp_cancel_work_order` | 取消工单（记录原因，已关闭 / 已取消工单不可取消） |
 | `erp_run_mrp` / `erp_list_proposals` | 运行 MRP 净算（逐层 / 含在途与安全库存）/ 查询建议 |
 
-### MES 工具（18 个）
+### MES 工具（30 个）
 
 | 工具 | 说明 |
 | --- | --- |
@@ -171,8 +172,17 @@ APS 三域与集成工程的统一门面，便于单测与替换成真实 ERP / 
 | `mes_list_operations` | 查询工序进度 |
 | `mes_start_production_order` | 生产订单开工 |
 | `mes_report_progress` | 报工 / 完工（末道工序生成成品批次并发布 `COMPLETION`） |
-| `mes_report_downtime` / `mes_oee_report` | 设备停机 / OEE 综合效率 |
-| `mes_quality_inspect` / `mes_list_quality_records` | 质量检验 / 检验记录 |
+| `mes_start_run` / `mes_end_run` | 工序开工 / 完工报工（占用工作中心，生成 run 记录） |
+| `mes_log_run_output` / `mes_log_run_downtime` | 报工产量（合格 / 报废）/ 记录计划与非计划停机 |
+| `mes_list_runs` / `mes_get_run` | 查询生产报工与停机明细 |
+| `mes_oee_report` | OEE 分解（可用率 × 表现 × 质量，按设备 / run / 工单汇总） |
+| `mes_get_work_instructions` | 查询工序作业指导书、工装与检验要求 |
+| `mes_report_downtime` | 设备停机事件（不绑定 run 的通用入口） |
+| `mes_quality_inspect` / `mes_list_quality_records` | 质量检验 / 检验记录（含缺陷代码、单元号、工位） |
+| `mes_record_test` / `mes_list_tests` | CMM 实测记录 / 检测明细查询 |
+| `mes_yield_report` | 一次合格率（FPY）与缺陷 Pareto |
+| `mes_spc_report` | 关键尺寸 SPC（均值、标准差、Cp / Cpk、超差数） |
+| `mes_recall_report` | 来料批次召回影响（成品 / 工单 / 销售订单 / 客户 / 数量） |
 | `mes_issue_material` | 生产领料 / 倒冲（按批次 FIFO 占用） |
 | `mes_list_consumptions` | 查询工单领料批次明细 |
 | `mes_trace_lot` | 批次谱系追溯（上游来料 / 下游成品） |
@@ -242,7 +252,7 @@ MES_MCP_DB=data/mes.db mes-mcp
 
 首次启动会自动建表并写入演示种子数据（1 个刻意缺料的工单用于演示齐套缺口）。
 
-如需 carbon 风格的「薄网关」形态，只向客户端暴露 4 个元工具，57 个领域工具全部经
+如需 carbon 风格的「薄网关」形态，只向客户端暴露 4 个元工具，69 个领域工具全部经
 `call_tool` 调用：
 
 ```bash
@@ -311,8 +321,13 @@ python examples/scheduling_agent_demo.py
 
 ```bash
 python web_demo/server.py
-# 打开 http://localhost:8000 ，点击「一键跑通完整流程」
+# 打开 http://localhost:8000
 ```
+
+启动时会自动跑一遍闭环并填充驾驶舱数据：工单同步 → 排产下发 → 逐工序报工（run）
+→ 停机 → CMM 抽检 → 质量判定 → OEE / FPY / SPC / 召回。页面包含总览、甘特、
+物料与 MRP、质量与 OEE、批次追溯、集成与网关 7 个视图；「一键跑通完整流程」
+可随时重放。
 
 ---
 
@@ -347,7 +362,7 @@ docker run --rm -v "$PWD/data:/data" -e MES_MCP_DB=/data/mes.db mes-scheduling-m
 ```
 .
 ├── src/mes_scheduling_mcp/
-│   ├── server.py        # MCP 工具层（60 个领域/集成/网关工具 + 鉴权 + RBAC + 观测）
+│   ├── server.py        # MCP 工具层（73 个领域/集成/网关工具 + 鉴权 + RBAC + 观测）
 │   ├── tool_catalog.py  # 工具清单单一来源（search_tools 与 Web 演示共用）
 │   ├── gateway.py       # 薄网关：search / describe / call / call_destructive
 │   ├── formatting.py    # 结果整形：分页 / 字段投影 / 去 null / 字符预算
@@ -366,7 +381,7 @@ docker run --rm -v "$PWD/data:/data" -e MES_MCP_DB=/data/mes.db mes-scheduling-m
 │   │   └── reconcile.py
 │   ├── erp.py           # ERP 领域：工单 / 物料 / BOM / 采购 / MRP
 │   ├── scheduling.py    # APS：有限产能 + 工序前后约束 + 换型矩阵
-│   ├── mes.py           # MES 领域：产线 / 排程 / 报工 / OEE / 质量 / 批次谱系
+│   ├── mes.py           # MES 领域：产线 / 报工 / OEE / 质量 / SPC / 召回 / 批次谱系
 │   ├── store.py         # SQLite 存储与种子初始化
 │   ├── models.py        # 领域模型（dataclass / StrEnum）
 │   ├── seed.py          # 演示种子数据（含 outbox 事件）

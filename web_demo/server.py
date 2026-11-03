@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from collections import Counter
 from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -38,6 +39,22 @@ STATE: dict = {
     "shortages": [],
     "capacity_blocked": [],
     "target_po": None,
+    "recall_lot": None,
+}
+
+_SPECS = {
+    "FG-1001": ("外圆直径 φ32", 32.0, 0.025),
+    "FG-1002": ("外径 φ120", 120.0, 0.05),
+    "FG-1003": ("轴颈 φ25k6", 25.0, 0.008),
+    "FG-1004": ("喷孔 φ0.25", 0.25, 0.01),
+    "SF-1001": ("外圆 φ18h6", 18.0, 0.006),
+}
+_OFFSETS = [-0.40, 0.20, -0.15, 0.35, 0.00, -0.25, 1.18, 0.12, -0.30, 0.05]
+_DOWNTIME = {
+    "CNC-01": ("BREAKDOWN", 18.0, False),
+    "HT-01": ("MAINTENANCE", 12.0, True),
+    "GRIND-01": ("QUALITY_STOP", 8.0, False),
+    "DIE-01": ("SETUP", 15.0, True),
 }
 
 
@@ -50,7 +67,7 @@ def run_all() -> dict:
     backend.reset()
     STATE.update({"ran_at": None, "plan_id": None, "plan": None, "order_dates": [],
                   "utilization": [], "shortages": [], "capacity_blocked": [],
-                  "target_po": None})
+                  "target_po": None, "recall_lot": None})
     steps = []
 
     orders = _records(backend.erp.list_work_orders(status="RELEASED"))
@@ -112,47 +129,104 @@ def run_all() -> dict:
     })
 
     released = backend.mes.list_production_orders(status="RELEASED")
+    released = sorted(released, key=lambda x: x.due_date or "")
     reported = []
-    target = None
-    if released:
-        target = sorted(released, key=lambda x: x.due_date or "")[0]
-        reqs = backend.erp.bom_explode(target.product_sku, target.quantity)
-        issued = []
+    issued_total = []
+    run_count = 0
+    test_count = 0
+    used_downtime: set[str] = set()
+    target = released[0] if released else None
+    for idx, po in enumerate(released):
+        reqs = backend.erp.bom_explode(po.product_sku, po.quantity)
         for req in reqs:
             try:
-                backend.mes.issue_material(target.production_order_no, req["sku"], req["required"])
-                issued.append(f"{req['sku']} x{req['required']}")
+                backend.mes.issue_material(po.production_order_no, req["sku"], req["required"])
+                issued_total.append(f"{po.production_order_no}:{req['sku']}")
             except Exception:
                 pass
-        steps.append({
-            "step": "按 BOM 领料：批次 FIFO 占用并记录谱系",
-            "tool": "mes_issue_material",
-            "result": issued,
-        })
-        backend.mes.start_production_order(target.production_order_no)
-        ops = sorted(backend.mes.list_operations(target.production_order_no),
+        backend.mes.start_production_order(po.production_order_no)
+        ops = sorted(backend.mes.list_operations(po.production_order_no),
                      key=lambda o: o.operation_no)
         for op in ops:
-            backend.mes.report_progress(target.production_order_no, op.operation_no,
-                                        qty_good=target.quantity, qty_bad=0, complete=True)
-        progress = backend.synchronize_progress()
-        reported = [f"{u['erp']} → 完工" for u in progress["updated"]]
+            run = backend.mes.start_run(po.production_order_no, op.operation_no)
+            run_count += 1
+            scrap = 1 if op is ops[-1] else 0
+            if op.work_center in _DOWNTIME and op.work_center not in used_downtime:
+                reason, minutes, planned = _DOWNTIME[op.work_center]
+                backend.mes.log_run_downtime(run["run_no"], reason, minutes, planned=planned)
+                used_downtime.add(op.work_center)
+            backend.mes.log_run_output(run["run_no"], max(0, po.quantity - scrap), scrap)
+            backend.mes.end_run(run["run_no"])
+            backend.mes.report_progress(po.production_order_no, op.operation_no,
+                                        qty_good=max(0, po.quantity - scrap),
+                                        qty_bad=scrap, complete=True)
+        if ops:
+            final_op = ops[-1]
+            characteristic, nominal, tolerance = _SPECS.get(po.product_sku, ("关键尺寸", 10.0, 0.02))
+            fails = 0
+            for sample, factor in enumerate(_OFFSETS, start=1):
+                measured = round(nominal + factor * tolerance, 4)
+                defect = ""
+                description = ""
+                if abs(factor) > 1:
+                    defect, description = "DIM_OOT", "尺寸超差"
+                elif idx == 1 and sample == 3:
+                    defect, description = "SURFACE_SCRATCH", "表面划伤"
+                result = "FAIL" if defect else "PASS"
+                fails += 1 if defect else 0
+                backend.mes.record_test(
+                    po.production_order_no, final_op.operation_no,
+                    unit_ref=f"{po.production_order_no}-{sample:03d}",
+                    result=result, station="CMM-01", defect_code=defect,
+                    defect_desc=description, characteristic=characteristic,
+                    nominal=nominal, tolerance=tolerance, measured=measured,
+                    inspector="QC-01")
+                test_count += 1
+            backend.mes.quality_inspect(
+                po.production_order_no, final_op.operation_no, sample_qty=len(_OFFSETS),
+                defect_qty=fails, disposition="REWORK" if fails else "PASS",
+                defect_code="DIM_OOT" if fails else "", defect_desc="尺寸超差" if fails else "",
+                station="CMM-01", inspector="QC-01")
+    steps.append({
+        "step": "按 BOM 领料并逐工序开工报工（记录停机与产出）",
+        "tool": "mes_issue_material + mes_start_run + mes_log_run_output",
+        "result": {"orders": len(released), "runs": run_count,
+                   "issued_lines": len(issued_total)},
+    })
+    progress = backend.synchronize_progress()
+    reported = [f"{u['erp']} → 完工" for u in progress["updated"]]
     steps.append({
         "step": "报工并回写 ERP 完工（末道工序生成成品批次）",
         "tool": "mes_report_progress + integration_sync_progress",
         "result": reported,
     })
+    steps.append({
+        "step": "终检采样：CMM 实测值、缺陷代码与一次合格率",
+        "tool": "mes_record_test + mes_yield_report",
+        "result": {"tests": test_count, "yield": backend.mes.yield_report()},
+    })
 
     trace = None
+    recall = None
+    recall_lot = None
     if target:
         trace = backend.mes.trace_lot(f"LOT-{target.production_order_no}", direction="up")
+        lot_counts: Counter[str] = Counter()
+        for po in released:
+            for consumption in backend.mes.list_consumptions(po.production_order_no):
+                lot_counts[consumption["lot_no"]] += 1
+        if lot_counts:
+            recall_lot = lot_counts.most_common(1)[0][0]
+            recall = backend.mes.recall_report(recall_lot)
         steps.append({
-            "step": "成品批次向上追溯到来料批次",
-            "tool": "mes_trace_lot",
+            "step": "成品批次向上追溯，并从来料批次做召回影响分析",
+            "tool": "mes_trace_lot + mes_recall_report",
             "result": {
                 "lot_no": trace["lot_no"],
                 "upstream_lots": trace["upstream_lots"],
                 "links": len(trace["parents"]),
+                "recall_lot": recall_lot,
+                "affected_customers": recall["affected_customers"] if recall else [],
             },
         })
 
@@ -172,6 +246,7 @@ def run_all() -> dict:
         "shortages": plan["shortages"],
         "capacity_blocked": plan["capacity_blocked"],
         "target_po": target.production_order_no if target else None,
+        "recall_lot": recall_lot,
     })
 
     return {
@@ -193,14 +268,19 @@ def build_state() -> dict:
     shifts = _records(backend.mes.list_shifts())
     shift_date = shifts[0]["shift_date"] if shifts else None
 
-    oee = [backend.mes.oee_report(wc["code"]) for wc in work_centers]
-    oee_avg = round(sum(x["oee"] for x in oee) / len(oee), 3) if oee else 0
+    oee = [backend.mes.oee_report(work_center=wc["code"]) for wc in work_centers]
+    active_oee = [x for x in oee if x["runs"]]
+    oee_avg = round(sum(x["oee"] for x in active_oee) / len(active_oee), 3) if active_oee else 0
+    yield_report = backend.mes.yield_report()
+    spc = backend.mes.spc_report()
+    cpk_values = [row["cpk"] for row in spc["characteristics"] if row["cpk"] is not None]
 
     trace = None
     if STATE.get("target_po"):
         lot_no = f"LOT-{STATE['target_po']}"
         trace = backend.mes.trace_lot(lot_no, direction="up")
         trace["consumptions"] = backend.mes.list_consumptions(STATE["target_po"])
+    recall = backend.mes.recall_report(STATE["recall_lot"]) if STATE.get("recall_lot") else None
 
     reconcile = backend.reconcile()
     kpis = {
@@ -211,6 +291,10 @@ def build_state() -> dict:
         "scheduled_orders": summary.get("scheduled_orders", 0),
         "late_orders": summary.get("late_orders", 0),
         "oee": oee_avg,
+        "fpy": yield_report["first_pass_yield"],
+        "tests": yield_report["tested"],
+        "defects": yield_report["failed"],
+        "cpk_min": round(min(cpk_values), 3) if cpk_values else None,
         "wip_orders": len([p for p in production_orders
                            if str(p["status"]) in ("RELEASED", "IN_PROCESS")]),
         "shortage_orders": summary.get("shortage_orders", 0),
@@ -237,7 +321,14 @@ def build_state() -> dict:
             "operations": backend.aps.schedule_detail(plan["plan_id"])["operations"] if plan else [],
         },
         "trace": trace,
-        "quality": _records(backend.mes.list_quality_records()),
+        "recall": recall,
+        "runs": _records(backend.mes.list_runs()),
+        "quality": {
+            "records": _records(backend.mes.list_quality_records()),
+            "tests": _records(backend.mes.list_tests()),
+            "yield": yield_report,
+            "spc": spc,
+        },
         "integration": {
             "outbox": backend.outbox_status(),
             "inbox": backend.inbox_status(),
@@ -340,6 +431,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
+    if not backend.mes.list_runs():
+        run_all()
     port = int(os.environ.get("PORT", "8000"))
     httpd = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     print(f"mes-mcp web demo listening on 0.0.0.0:{port}")

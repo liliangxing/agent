@@ -137,6 +137,16 @@ class QualityDisposition(StrEnum):
     CONCESSION = "CONCESSION"
 
 
+class RunStatus(StrEnum):
+    RUNNING = "RUNNING"
+    ENDED = "ENDED"
+
+
+class TestResult(StrEnum):
+    PASS = "PASS"
+    FAIL = "FAIL"
+
+
 class ScheduleStatus(StrEnum):
     DRAFT = "DRAFT"
     OPTIMIZED = "OPTIMIZED"
@@ -342,6 +352,7 @@ class RoutingOperation:
     tooling: str | None = None
     queue_time_min: float = 0.0
     inspection_required: bool = False
+    instructions: str = ""
 
 
 @dataclass
@@ -372,6 +383,21 @@ class OperationProgress:
 
 
 @dataclass
+class ProductionRun:
+    run_no: str
+    production_order_no: str
+    operation_no: int
+    work_center: str
+    planned_minutes: float
+    ideal_cycle_sec: float
+    qty_good: int = 0
+    qty_scrap: int = 0
+    status: RunStatus = RunStatus.RUNNING
+    started_at: str = field(default_factory=_now)
+    ended_at: str | None = None
+
+
+@dataclass
 class DowntimeEvent:
     event_id: str
     work_center: str
@@ -379,6 +405,8 @@ class DowntimeEvent:
     start_time: str
     end_time: str | None = None
     duration_min: float = 0.0
+    run_no: str | None = None
+    planned: bool = False
 
 
 @dataclass
@@ -389,8 +417,30 @@ class QualityRecord:
     sample_qty: int
     defect_qty: int
     disposition: QualityDisposition
+    defect_code: str = ""
+    defect_desc: str = ""
+    unit_ref: str = ""
+    station: str = ""
     inspector: str = ""
     inspected_at: str = field(default_factory=_now)
+
+
+@dataclass
+class TestRecord:
+    test_no: str
+    production_order_no: str
+    operation_no: int
+    unit_ref: str
+    station: str
+    result: TestResult
+    defect_code: str = ""
+    defect_desc: str = ""
+    characteristic: str = ""
+    nominal: float | None = None
+    tolerance: float | None = None
+    measured: float | None = None
+    inspector: str = ""
+    tested_at: str = field(default_factory=_now)
 
 
 @dataclass

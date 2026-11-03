@@ -40,6 +40,7 @@ from .models import (
     OperationProgress,
     OutboxEvent,
     ProductionOrder,
+    ProductionRun,
     PurchaseOrder,
     PurchaseOrderLine,
     QualityRecord,
@@ -49,6 +50,7 @@ from .models import (
     ScheduleOperation,
     SchedulePlan,
     ShiftEntry,
+    TestRecord,
     WorkCenter,
     WorkOrder,
 )
@@ -273,6 +275,20 @@ class Store:
                 duration_min REAL NOT NULL DEFAULT 0
             );
 
+            CREATE TABLE IF NOT EXISTS production_runs (
+                run_no              TEXT PRIMARY KEY,
+                production_order_no TEXT NOT NULL,
+                operation_no        INTEGER NOT NULL,
+                work_center         TEXT NOT NULL,
+                planned_minutes     REAL NOT NULL,
+                ideal_cycle_sec     REAL NOT NULL,
+                qty_good            INTEGER NOT NULL DEFAULT 0,
+                qty_scrap           INTEGER NOT NULL DEFAULT 0,
+                status              TEXT NOT NULL DEFAULT 'RUNNING',
+                started_at          TEXT NOT NULL,
+                ended_at            TEXT
+            );
+
             CREATE TABLE IF NOT EXISTS quality_records (
                 record_no          TEXT PRIMARY KEY,
                 production_order_no TEXT NOT NULL,
@@ -280,8 +296,29 @@ class Store:
                 sample_qty         INTEGER NOT NULL,
                 defect_qty         INTEGER NOT NULL,
                 disposition        TEXT NOT NULL,
+                defect_code        TEXT NOT NULL DEFAULT '',
+                defect_desc        TEXT NOT NULL DEFAULT '',
+                unit_ref           TEXT NOT NULL DEFAULT '',
+                station            TEXT NOT NULL DEFAULT '',
                 inspector          TEXT NOT NULL DEFAULT '',
                 inspected_at       TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS test_records (
+                test_no             TEXT PRIMARY KEY,
+                production_order_no TEXT NOT NULL,
+                operation_no        INTEGER NOT NULL,
+                unit_ref            TEXT NOT NULL,
+                station             TEXT NOT NULL,
+                result              TEXT NOT NULL,
+                defect_code         TEXT NOT NULL DEFAULT '',
+                defect_desc         TEXT NOT NULL DEFAULT '',
+                characteristic      TEXT NOT NULL DEFAULT '',
+                nominal             REAL,
+                tolerance           REAL,
+                measured            REAL,
+                inspector           TEXT NOT NULL DEFAULT '',
+                tested_at           TEXT NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS material_issues (
@@ -422,6 +459,19 @@ class Store:
                 "safety_stock": "REAL NOT NULL DEFAULT 0",
                 "pegged_orders": "TEXT NOT NULL DEFAULT ''",
                 "release_date": "TEXT",
+            },
+            "routing_operations": {
+                "instructions": "TEXT NOT NULL DEFAULT ''",
+            },
+            "downtime_events": {
+                "run_no": "TEXT",
+                "planned": "INTEGER NOT NULL DEFAULT 0",
+            },
+            "quality_records": {
+                "defect_code": "TEXT NOT NULL DEFAULT ''",
+                "defect_desc": "TEXT NOT NULL DEFAULT ''",
+                "unit_ref": "TEXT NOT NULL DEFAULT ''",
+                "station": "TEXT NOT NULL DEFAULT ''",
             },
         }
         for table, columns in additions.items():
@@ -790,17 +840,49 @@ class Store:
     def insert_downtime(self, event: DowntimeEvent) -> None:
         self._insert_many("downtime_events", [event.__dict__])
 
-    def list_downtime(self, work_center: str | None = None) -> list[DowntimeEvent]:
+    def list_downtime(self, work_center: str | None = None,
+                      run_no: str | None = None) -> list[DowntimeEvent]:
+        sql = "SELECT * FROM downtime_events WHERE 1=1"
+        args: list[Any] = []
         if work_center:
-            rows = self.conn.execute(
-                "SELECT * FROM downtime_events WHERE work_center = ? ORDER BY start_time DESC", (work_center,)
-            )
-        else:
-            rows = self.conn.execute("SELECT * FROM downtime_events ORDER BY start_time DESC")
-        return [DowntimeEvent(**dict(r)) for r in rows]
+            sql += " AND work_center = ?"
+            args.append(work_center)
+        if run_no:
+            sql += " AND run_no = ?"
+            args.append(run_no)
+        sql += " ORDER BY start_time DESC"
+        return [DowntimeEvent(**dict(r)) for r in self.conn.execute(sql, args)]
 
     def update_downtime(self, event_id: str, **changes: Any) -> None:
         self._update("downtime_events", "event_id", event_id, changes)
+
+    # production runs / OEE
+    def insert_run(self, run: ProductionRun) -> None:
+        self._insert_many("production_runs", [run.__dict__])
+
+    def get_run(self, run_no: str) -> Optional[ProductionRun]:
+        r = self.conn.execute("SELECT * FROM production_runs WHERE run_no = ?", (run_no,)).fetchone()
+        return ProductionRun(**dict(r)) if r else None
+
+    def list_runs(self, production_order_no: str | None = None,
+                  work_center: str | None = None,
+                  status: str | None = None) -> list[ProductionRun]:
+        sql = "SELECT * FROM production_runs WHERE 1=1"
+        args: list[Any] = []
+        if production_order_no:
+            sql += " AND production_order_no = ?"
+            args.append(production_order_no)
+        if work_center:
+            sql += " AND work_center = ?"
+            args.append(work_center)
+        if status:
+            sql += " AND status = ?"
+            args.append(status)
+        sql += " ORDER BY started_at"
+        return [ProductionRun(**dict(r)) for r in self.conn.execute(sql, args)]
+
+    def update_run(self, run_no: str, **changes: Any) -> None:
+        self._update("production_runs", "run_no", run_no, changes)
 
     # quality
     def insert_quality_record(self, record: QualityRecord) -> None:
@@ -814,6 +896,26 @@ class Store:
         else:
             rows = self.conn.execute("SELECT * FROM quality_records ORDER BY inspected_at")
         return [QualityRecord(**dict(r)) for r in rows]
+
+    def insert_test(self, record: TestRecord) -> None:
+        self._insert_many("test_records", [record.__dict__])
+
+    def list_tests(self, production_order_no: str | None = None,
+                   result: str | None = None,
+                   characteristic: str | None = None) -> list[TestRecord]:
+        sql = "SELECT * FROM test_records WHERE 1=1"
+        args: list[Any] = []
+        if production_order_no:
+            sql += " AND production_order_no = ?"
+            args.append(production_order_no)
+        if result:
+            sql += " AND result = ?"
+            args.append(result)
+        if characteristic:
+            sql += " AND characteristic = ?"
+            args.append(characteristic)
+        sql += " ORDER BY tested_at"
+        return [TestRecord(**dict(r)) for r in self.conn.execute(sql, args)]
 
     # material issues
     def insert_material_issue(self, issue: MaterialIssue) -> None:

@@ -183,6 +183,25 @@
   .arrow { align-self: center; color: var(--dim); font-family: var(--mono); }
   .node.out { border-color: rgba(245,165,36,.45); background: rgba(245,165,36,.06); }
 
+  /* quality / OEE */
+  .oee-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+  .oee-card { background: var(--bg2); border: 1px solid var(--line); border-radius: 10px; padding: 11px 12px; }
+  .oee-card .head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .oee-card .head .code { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .oee-card .head .big { font-family: var(--mono); font-size: 20px; font-weight: 700; color: var(--green); }
+  .factor { display: grid; grid-template-columns: 58px 1fr 42px; gap: 8px; align-items: center; margin-top: 7px; font-size: 11px; color: var(--dim); }
+  .factor .track { height: 6px; }
+  .factor .fill.a { background: var(--cyan); }
+  .factor .fill.p { background: var(--amber); }
+  .factor .fill.q { background: var(--green); }
+  .pareto { display: grid; gap: 9px; }
+  .parrow { display: grid; grid-template-columns: 132px 1fr 74px; gap: 9px; align-items: center; font-size: 12px; }
+  .parrow .code { font-family: var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .parrow .bar2 { height: 8px; border-radius: 99px; background: linear-gradient(90deg, var(--red), #fbbf24); }
+  .parrow .cnt { text-align: right; font-family: var(--mono); color: var(--muted); }
+  .recall-hero { display: flex; flex-wrap: wrap; gap: 20px; align-items: center; justify-content: space-between; border: 1px solid rgba(248,113,113,.35); background: rgba(248,113,113,.06); border-radius: 10px; padding: 13px 15px; }
+  .recall-hero .big { font-family: var(--mono); font-size: 19px; }
+
   /* gateway */
   .gw { display: grid; grid-template-columns: 380px 1fr; gap: 14px; }
   .gw-tools { max-height: 620px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
@@ -265,6 +284,7 @@
     <button class="tab active" data-tab="overview">总览</button>
     <button class="tab" data-tab="gantt">排产甘特</button>
     <button class="tab" data-tab="mrp">物料与 MRP</button>
+    <button class="tab" data-tab="quality">质量与 OEE</button>
     <button class="tab" data-tab="trace">批次追溯</button>
     <button class="tab" data-tab="integration">集成与审计</button>
     <button class="tab" data-tab="gateway">工具网关</button>
@@ -340,6 +360,37 @@
       </div>
     </section>
 
+    <section class="panel" data-panel="quality">
+      <div class="kpis" style="grid-template-columns:repeat(4,1fr);margin-top:0;">
+        <div class="kpi ok"><div class="k">一次合格率</div><div class="v" id="qFpy">--</div><div class="s" id="qFpySub">CMM 抽检</div></div>
+        <div class="kpi"><div class="k">设备 OEE</div><div class="v" id="qOee">--</div><div class="s">仅统计有报工设备</div></div>
+        <div class="kpi"><div class="k">检测样本</div><div class="v" id="qTests">--</div><div class="s" id="qDefects">--</div></div>
+        <div class="kpi"><div class="k">最小 Cpk</div><div class="v" id="qCpk">--</div><div class="s">关键尺寸过程能力</div></div>
+      </div>
+      <div class="grid two" style="margin-top:14px;">
+        <div class="card">
+          <h2>OEE 分解 <span class="sub">可用率 × 表现 × 质量</span></h2>
+          <div class="oee-grid" id="oeeCards"></div>
+        </div>
+        <div class="card">
+          <h2>缺陷 Pareto <span class="sub">按缺陷代码</span></h2>
+          <div class="pareto" id="pareto"></div>
+        </div>
+      </div>
+      <div class="card" style="margin-top:14px;">
+        <h2>关键尺寸 SPC <span class="sub">Cp / Cpk / 超差</span></h2>
+        <div class="tablewrap"><table id="spctable"></table></div>
+      </div>
+      <div class="card" style="margin-top:14px;">
+        <h2>检测记录 <span class="sub">CMM 实测值与缺陷代码</span></h2>
+        <div class="tablewrap"><table id="testtable"></table></div>
+      </div>
+      <div class="card" style="margin-top:14px;">
+        <h2>生产报工 <span class="sub">run × operation × 停机</span></h2>
+        <div class="tablewrap"><table id="runtable"></table></div>
+      </div>
+    </section>
+
     <section class="panel" data-panel="trace">
       <div class="card">
         <h2>批次谱系 <span class="sub">成品批次 → 来料批次</span></h2>
@@ -349,6 +400,10 @@
       <div class="card" style="margin-top:14px;">
         <h2>领料批次明细</h2>
         <div class="tablewrap"><table id="consumptiontable"></table></div>
+      </div>
+      <div class="card" style="margin-top:14px;">
+        <h2>批次召回 <span class="sub">来料批次 → 受影响成品 / 工单 / 客户</span></h2>
+        <div id="recall"></div>
       </div>
     </section>
 
@@ -462,8 +517,8 @@ function renderKpis(s) {
     { label: '齐套率', v: pct(k.kit_rate), s: `缺料 ${k.shortage_orders ?? 0} 单`, cls: (k.kit_rate ?? 1) < 1 ? 'warn' : 'ok' },
     { label: '排入订单', v: k.scheduled_orders, s: '有限产能排程', cls: '' },
     { label: '迟单', v: k.late_orders, s: 'projected > due', cls: k.late_orders > 0 ? 'bad' : 'ok' },
-    { label: '设备 OEE', v: pct(k.oee), s: '8 个工作中心均值', cls: 'ok' },
-    { label: '在制订单', v: k.wip_orders, s: 'RELEASED / IN_PROCESS', cls: '' },
+    { label: '设备 OEE', v: pct(k.oee), s: '有报工设备均值', cls: 'ok' },
+    { label: '一次合格率', v: pct(k.fpy), s: `${k.tests ?? 0} 件抽检 / ${k.defects ?? 0} 件不良`, cls: (k.fpy ?? 1) < .95 ? 'warn' : 'ok' },
   ];
   $('#kpis').innerHTML = cards.map(c => `
     <div class="kpi ${c.cls}">
@@ -688,6 +743,135 @@ function renderTrace(s) {
       </tr>`).join('')}</tbody>`;
 }
 
+/* ------------------------------------------------------- quality / OEE */
+function factor(label, value, cls) {
+  return `<div class="factor">
+    <span>${esc(label)}</span>
+    <div class="track"><div class="fill ${cls}" style="width:${Math.min(100, Math.round((value || 0) * 100))}%"></div></div>
+    <span class="num">${pct(value)}</span>
+  </div>`;
+}
+
+function renderQuality(s) {
+  const q = s.quality || {};
+  const y = q.yield || {};
+  const spc = q.spc || { characteristics: [] };
+  const oee = (s.oee || []).filter(x => (x.runs || 0) > 0);
+  const cpks = spc.characteristics.map(x => x.cpk).filter(v => v !== null && v !== undefined);
+  $('#qFpy').textContent = pct(y.first_pass_yield);
+  $('#qFpySub').textContent = `${y.tested ?? 0} 件抽检 · ${y.failed ?? 0} 件不良`;
+  $('#qOee').textContent = pct(s.kpis?.oee);
+  $('#qTests').textContent = y.tested ?? 0;
+  $('#qDefects').textContent = `缺陷 ${y.failed ?? 0} 件 · 返工 ${y.rework_samples ?? 0} 件`;
+  $('#qCpk').textContent = cpks.length ? num(Math.min(...cpks), 2) : '--';
+
+  $('#oeeCards').innerHTML = oee.map(x => `
+    <div class="oee-card">
+      <div class="head"><span class="code">${esc(x.work_center)} · ${x.runs} 次报工</span><span class="big">${pct(x.oee)}</span></div>
+      ${factor('可用率', x.availability, 'a')}
+      ${factor('表现', x.performance, 'p')}
+      ${factor('质量', x.quality, 'q')}
+      <div style="color:var(--dim);font-size:11px;margin-top:7px;">
+        计划 ${num(x.planned_minutes, 0)} min · 非计划停机 ${num(x.unplanned_downtime_min, 0)} min · 报废 ${x.scrap} 件
+      </div>
+    </div>`).join('') || '<div class="empty">暂无报工数据，运行闭环后生成</div>';
+
+  const pareto = y.defect_pareto || [];
+  const maxCount = Math.max(1, ...pareto.map(p => p.count));
+  $('#pareto').innerHTML = pareto.map(p => `
+    <div class="parrow">
+      <span class="code" title="${esc(p.description || '')}">${esc(p.defect_code)}</span>
+      <div class="bar2" style="width:${Math.max(4, Math.round(p.count / maxCount * 100))}%"></div>
+      <span class="cnt">${p.count} 件 · ${pct(p.share)}</span>
+    </div>`).join('') || '<div class="empty">暂无缺陷记录</div>';
+
+  const chars = spc.characteristics || [];
+  $('#spctable').innerHTML = `
+    <thead><tr><th>特性</th><th>样本</th><th>公差</th><th>均值</th><th>标准差</th><th>最小/最大</th><th>Cp</th><th>Cpk</th><th>超差</th></tr></thead>
+    <tbody>${chars.map(c => `
+      <tr>
+        <td class="mono">${esc(c.characteristic)}</td>
+        <td class="num">${c.n}</td>
+        <td class="mono">${c.lsl === null ? '--' : `${num(c.lsl, 4)} ~ ${num(c.usl, 4)}`}</td>
+        <td class="num">${num(c.mean, 4)}</td>
+        <td class="num">${num(c.stdev, 4)}</td>
+        <td class="num">${num(c.min, 4)} / ${num(c.max, 4)}</td>
+        <td class="num">${num(c.cp, 2)}</td>
+        <td class="num" style="color:${c.cpk !== null && c.cpk < 1 ? 'var(--red)' : 'var(--green)'}">${num(c.cpk, 2)}</td>
+        <td class="num">${c.out_of_spec}</td>
+      </tr>`).join('') || '<tr><td colspan="9" class="empty">暂无 SPC 数据</td></tr>'}</tbody>`;
+
+  const tests = (q.tests || []).slice(-30).reverse();
+  $('#testtable').innerHTML = `
+    <thead><tr><th>样本</th><th>工单</th><th>工序</th><th>特性</th><th>实测</th><th>结果</th><th>缺陷</th><th>时间</th></tr></thead>
+    <tbody>${tests.map(t => `
+      <tr>
+        <td class="mono">${esc(t.unit_ref)}</td>
+        <td class="mono">${esc(t.production_order_no)}</td>
+        <td class="num">${t.operation_no}</td>
+        <td class="mono">${esc(t.characteristic || '--')}</td>
+        <td class="num">${num(t.measured, 4)}</td>
+        <td>${t.result === 'PASS' ? badge('PASS', 'ok') : badge('FAIL', 'bad')}</td>
+        <td class="mono">${esc(t.defect_code || '--')}</td>
+        <td class="mono" style="color:var(--dim)">${esc(t.tested_at)}</td>
+      </tr>`).join('') || '<tr><td colspan="8" class="empty">暂无检测记录</td></tr>'}</tbody>`;
+
+  const runs = (s.runs || []).slice(-30).reverse();
+  $('#runtable').innerHTML = `
+    <thead><tr><th>报工</th><th>工单</th><th>工序</th><th>设备</th><th>计划(min)</th><th>合格</th><th>报废</th><th>状态</th></tr></thead>
+    <tbody>${runs.map(r => `
+      <tr>
+        <td class="mono">${esc(r.run_no)}</td>
+        <td class="mono">${esc(r.production_order_no)}</td>
+        <td class="num">${r.operation_no}</td>
+        <td class="mono">${esc(r.work_center)}</td>
+        <td class="num">${num(r.planned_minutes, 0)}</td>
+        <td class="num">${r.qty_good}</td>
+        <td class="num" style="color:${r.qty_scrap ? 'var(--amber)' : 'var(--dim)'}">${r.qty_scrap}</td>
+        <td>${badge(r.status, r.status === 'RUNNING' ? 'warn' : 'ok')}</td>
+      </tr>`).join('') || '<tr><td colspan="8" class="empty">暂无报工记录</td></tr>'}</tbody>`;
+}
+
+function renderRecall(s) {
+  const r = s.recall;
+  if (!r) {
+    $('#recall').innerHTML = '<div class="empty">运行闭环后生成来料批次召回报告</div>';
+    return;
+  }
+  const orders = r.affected_orders || [];
+  $('#recall').innerHTML = `
+    <div class="recall-hero">
+      <div>
+        <div class="badge destructive">来料批次</div>
+        <div class="big" style="margin-top:7px;">${esc(r.lot_no)}</div>
+        <div style="color:var(--muted);font-size:12px;margin-top:4px;">
+          受影响工单 ${r.affected_order_count} 张 · 成品 ${orders.length} 个批次 · 客户 ${r.affected_customers.length} 家
+        </div>
+      </div>
+      <div style="text-align:right;">
+        <div style="color:var(--dim);font-size:11px;">影响数量</div>
+        <div class="big" style="margin-top:5px;">${r.affected_quantity} 件</div>
+        <div style="color:var(--muted);font-size:12px;margin-top:4px;">${esc(r.affected_customers.join(' / ') || '--')}</div>
+      </div>
+    </div>
+    <div class="tablewrap" style="margin-top:12px;">
+      <table>
+        <thead><tr><th>ERP 工单</th><th>MES 订单</th><th>产品</th><th>数量</th><th>成品批次</th><th>销售订单</th><th>客户</th><th>状态</th></tr></thead>
+        <tbody>${orders.map(o => `
+          <tr>
+            <td class="mono">${esc(o.erp_work_order_no)}</td>
+            <td class="mono">${esc(o.production_order_no)}</td>
+            <td>${esc(o.product_name)} <span class="mono" style="color:var(--dim)">${esc(o.product_sku)}</span></td>
+            <td class="num">${o.quantity}</td>
+            <td class="mono" style="color:var(--cyan)">${esc(o.output_lot)}</td>
+            <td class="mono">${esc(o.sales_order_no || '--')}</td>
+            <td>${esc(o.customer || '--')}</td>
+            <td>${badge(o.status, o.status === 'COMPLETED' ? 'ok' : 'warn')}</td>
+          </tr>`).join('') || '<tr><td colspan="8" class="empty">该批次暂无下游成品</td></tr>'}</tbody>
+      </table>
+    </div>`;
+}
+
 /* --------------------------------------------------------- integration */
 function renderIntegration(s) {
   const it = s.integration || {};
@@ -893,7 +1077,9 @@ function renderAll(s) {
   renderAlerts(s);
   renderGantt(s);
   renderMrp(s);
+  renderQuality(s);
   renderTrace(s);
+  renderRecall(s);
   renderIntegration(s);
 }
 

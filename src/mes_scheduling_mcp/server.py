@@ -31,10 +31,14 @@ from .schemas import (
     MaterialIssue,
     PurchaseOrderCreate,
     QualityInspect,
+    RecordTest,
     ReportDowntime,
     ReportProgress,
+    RunDowntime,
+    RunOutput,
     SalesOrderCreate,
     ScheduleGenerate,
+    StartRun,
     WorkOrderCreate,
 )
 from .store import Store
@@ -68,8 +72,10 @@ def build_server(db_path: Optional[str] = None,
             "MES ↔ AI 排产 Agent ↔ ERP 生产集成服务（江苏某精密零部件厂）。"
             "典型闭环：erp_list_work_orders 查工单 → erp_check_material_availability 齐套 → "
             "integration_sync_orders 同步到 MES → schedule_generate 有限产能排产 → "
-            "schedule_dispatch 下发 → mes_report_progress 报工 → integration_sync_progress 回写 ERP → "
-            "integration_reconcile 对账。"
+            "schedule_dispatch 下发 → mes_start_run/mes_log_run_output 报工 → "
+            "mes_quality_inspect/mes_record_test 质检 → mes_yield_report 良率 → "
+            "integration_sync_progress 回写 ERP → integration_reconcile 对账。"
+            "设备 OEE 采用真实运行数据（可用率×表现×质量），来料批次可走 mes_recall_report 召回。"
             "工具面同时提供薄网关：search_tools 发现 → describe_tool 读契约 → "
             "call_tool 调用（支持 fields/limit/offset/truncate 结果整形）；"
             "DESTRUCTIVE 工具必须走 call_destructive_tool。"
@@ -262,6 +268,13 @@ def build_server(db_path: Optional[str] = None,
                         lambda: erp.close_work_order(order_no), {"order_no": order_no})
 
     @mcp.tool()
+    def erp_cancel_work_order(order_no: str, reason: str = "", ctx: Context = None) -> str:
+        """取消工单（已关闭/已取消的终态工单不可取消），并留审计。"""
+        return _execute("erp_cancel_work_order", "work_order", "update", ctx,
+                        lambda: erp.cancel_work_order(order_no, reason),
+                        {"order_no": order_no, "reason": reason})
+
+    @mcp.tool()
     def erp_run_mrp(ctx: Context = None) -> str:
         """运行 MRP：对所有已发布工单做物料需求净算并生成采购建议。"""
         return _execute("erp_run_mrp", "integration", "read", ctx, erp.run_mrp)
@@ -357,10 +370,67 @@ def build_server(db_path: Optional[str] = None,
                         {"data": data.model_dump()})
 
     @mcp.tool()
-    def mes_oee_report(work_center: str, ctx: Context = None) -> str:
-        """查询设备综合效率（OEE：可用率 × 表现 × 质量）。"""
+    def mes_oee_report(work_center: str | None = None, run_no: str | None = None,
+                       production_order_no: str | None = None, ctx: Context = None) -> str:
+        """查询设备综合效率 OEE（可用率 × 表现 × 质量），可按工作中心/报工/工单汇总。"""
         return _execute("mes_oee_report", "work_center", "read", ctx,
-                        lambda: mes.oee_report(work_center), {"work_center": work_center})
+                        lambda: mes.oee_report(work_center=work_center, run_no=run_no,
+                                               production_order_no=production_order_no),
+                        {"work_center": work_center, "run_no": run_no,
+                         "production_order_no": production_order_no})
+
+    @mcp.tool()
+    def mes_start_run(data: StartRun, ctx: Context = None) -> str:
+        """开始一次生产报工（运行），默认按工艺路线计算计划工时与理想节拍。"""
+        return _execute("mes_start_run", "production_order", "report", ctx,
+                        lambda: mes.start_run(**data.model_dump()),
+                        {"data": data.model_dump()})
+
+    @mcp.tool()
+    def mes_log_run_output(data: RunOutput, ctx: Context = None) -> str:
+        """登记报工产出：合格/报废数量，同时累计到对应工序。"""
+        return _execute("mes_log_run_output", "production_order", "report", ctx,
+                        lambda: mes.log_run_output(**data.model_dump()),
+                        {"data": data.model_dump()})
+
+    @mcp.tool()
+    def mes_log_run_downtime(data: RunDowntime, ctx: Context = None) -> str:
+        """登记报工停机（计划/非计划），用于 OEE 可用率。"""
+        return _execute("mes_log_run_downtime", "production_order", "report", ctx,
+                        lambda: mes.log_run_downtime(**data.model_dump()),
+                        {"data": data.model_dump()})
+
+    @mcp.tool()
+    def mes_end_run(run_no: str, ctx: Context = None) -> str:
+        """结束报工并释放工作中心。"""
+        return _execute("mes_end_run", "production_order", "report", ctx,
+                        lambda: mes.end_run(run_no), {"run_no": run_no})
+
+    @mcp.tool()
+    def mes_list_runs(production_order_no: str | None = None, work_center: str | None = None,
+                      status: str | None = None, ctx: Context = None) -> str:
+        """查询生产报工记录（按工单/工作中心/状态）。"""
+        return _execute("mes_list_runs", "production_order", "read", ctx,
+                        lambda: [r.__dict__ for r in mes.list_runs(
+                            production_order_no=production_order_no,
+                            work_center=work_center, status=status)],
+                        {"production_order_no": production_order_no,
+                         "work_center": work_center, "status": status})
+
+    @mcp.tool()
+    def mes_get_run(run_no: str, ctx: Context = None) -> str:
+        """查询单条报工记录。"""
+        return _execute("mes_get_run", "production_order", "read", ctx,
+                        lambda: mes.get_run(run_no).__dict__, {"run_no": run_no})
+
+    @mcp.tool()
+    def mes_get_work_instructions(production_order_no: str, operation_no: int | None = None,
+                                  ctx: Context = None) -> str:
+        """查询工序作业指导书（含工装、节拍、检验要求）。"""
+        return _execute("mes_get_work_instructions", "production_order", "read", ctx,
+                        lambda: mes.get_work_instructions(production_order_no, operation_no),
+                        {"production_order_no": production_order_no,
+                         "operation_no": operation_no})
 
     @mcp.tool()
     def mes_quality_inspect(data: QualityInspect, ctx: Context = None) -> str:
@@ -375,6 +445,45 @@ def build_server(db_path: Optional[str] = None,
         return _execute("mes_list_quality_records", "production_order", "read", ctx,
                         lambda: [q.__dict__ for q in mes.list_quality_records(production_order_no=production_order_no)],
                         {"production_order_no": production_order_no})
+
+    @mcp.tool()
+    def mes_record_test(data: RecordTest, ctx: Context = None) -> str:
+        """登记单件/单样本检测结果；支持 CMM 实测值、公差与缺陷代码。"""
+        return _execute("mes_record_test", "production_order", "inspect", ctx,
+                        lambda: mes.record_test(**data.model_dump()),
+                        {"data": data.model_dump()})
+
+    @mcp.tool()
+    def mes_list_tests(production_order_no: str | None = None, result: str | None = None,
+                       ctx: Context = None) -> str:
+        """查询检测记录（可按工单/结果过滤）。"""
+        return _execute("mes_list_tests", "production_order", "read", ctx,
+                        lambda: [t.__dict__ for t in mes.list_tests(
+                            production_order_no=production_order_no, result=result)],
+                        {"production_order_no": production_order_no, "result": result})
+
+    @mcp.tool()
+    def mes_yield_report(production_order_no: str | None = None, ctx: Context = None) -> str:
+        """首检/终检良率与缺陷 Pareto（一次合格率、返工/报废样本）。"""
+        return _execute("mes_yield_report", "production_order", "read", ctx,
+                        lambda: mes.yield_report(production_order_no),
+                        {"production_order_no": production_order_no})
+
+    @mcp.tool()
+    def mes_spc_report(characteristic: str | None = None,
+                       production_order_no: str | None = None, ctx: Context = None) -> str:
+        """关键尺寸 SPC：均值、标准差、Cp、Cpk 与超差数。"""
+        return _execute("mes_spc_report", "production_order", "read", ctx,
+                        lambda: mes.spc_report(characteristic, production_order_no),
+                        {"characteristic": characteristic,
+                         "production_order_no": production_order_no})
+
+    @mcp.tool()
+    def mes_recall_report(lot_no: str, max_depth: int = 10, ctx: Context = None) -> str:
+        """批次召回报告：从来料批次向下追到成品、工单、客户与数量。"""
+        return _execute("mes_recall_report", "production_order", "read", ctx,
+                        lambda: mes.recall_report(lot_no, max_depth=max_depth),
+                        {"lot_no": lot_no, "max_depth": max_depth})
 
     @mcp.tool()
     def mes_issue_material(data: MaterialIssue, ctx: Context = None) -> str:
