@@ -8,7 +8,7 @@ and publish outbox events so the MES side can react (transactional outbox).
 from __future__ import annotations
 
 from dataclasses import asdict
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Optional
 
 from .integration import Integration
@@ -287,25 +287,135 @@ class ERPService:
 
     # ------------------------------------------------------------------- MRP
     def run_mrp(self) -> dict[str, Any]:
-        """Demand explosion focused on raw material shortfalls -> proposals."""
+        """Time-phased MRP netting across all open work orders.
+
+        Unlike a naive per-order explosion, this aggregates gross requirements
+        per component, nets once against supply (on-hand, in-transit and open
+        purchase orders) plus safety stock, and then explodes *net* semi-finished
+        shortfalls into their own component demand.  Result: one consolidated
+        proposal per item instead of double-counting shared stock.
+        """
+        open_statuses = (OrderStatus.RELEASED, OrderStatus.IN_PROCESS)
+        work_orders = sorted(
+            (w for w in self._s.list_work_orders() if w.status in open_statuses),
+            key=lambda w: (w.due_date, w.order_no),
+        )
+
+        gross: dict[str, float] = {}
+        need_by: dict[str, str] = {}
+        pegged: dict[str, list[str]] = {}
+
+        def add_demand(sku: str, qty: float, due: str, source: str) -> None:
+            if qty <= 0:
+                return
+            gross[sku] = gross.get(sku, 0.0) + qty
+            if sku not in need_by or due < need_by[sku]:
+                need_by[sku] = due
+            orders = pegged.setdefault(sku, [])
+            if source not in orders:
+                orders.append(source)
+
+        # 1. gross component demand directly from each work order's BOM
+        for wo in work_orders:
+            item = self._s.get_item(wo.product_sku)
+            bom_code = wo.bom_code or (item.default_bom_code if item else None)
+            if not bom_code:
+                continue
+            for line in self._s.get_bom_lines(bom_code):
+                add_demand(line.component_sku,
+                           line.qty_per * (1.0 + line.scrap_rate) * wo.quantity,
+                           wo.due_date, wo.order_no)
+
+        # 2. scheduled receipts: open PO quantities + in-transit inventory
+        receipts: dict[str, float] = {}
+        for po in self._s.list_purchase_orders():
+            if str(po.status) in ("ISSUED", "PARTIALLY_RECEIVED"):
+                for line in po.lines:
+                    receipts[line.item_sku] = receipts.get(line.item_sku, 0.0) + max(
+                        0.0, line.quantity - line.received_qty)
+        for lot in self._s.list_inventory():
+            if lot.in_transit:
+                receipts[lot.sku] = receipts.get(lot.sku, 0.0) + lot.in_transit
+
+        # 3. net level by level, parents before children
+        depth = self._bom_depth()
+        proposals: list[MrpProposal] = []
+        max_depth = max(depth.values(), default=0)
+        for level in range(max_depth, -1, -1):
+            level_skus = [s for s in list(gross) if depth.get(s, 0) == level]
+            for sku in sorted(level_skus):
+                item = self._s.get_item(sku)
+                if item is None:
+                    continue
+                available = self._s.get_inventory_available(sku)
+                on_order = receipts.get(sku, 0.0)
+                safety = max(0.0, item.safety_stock)
+                demand = gross[sku]
+                net = demand + safety - available - on_order
+                if net <= 0:
+                    continue
+
+                make = item.item_type in (ItemType.FINISHED, ItemType.SEMI) and item.default_bom_code
+                ptype = MrpProposalType.PRODUCE if make else MrpProposalType.PURCHASE
+                due = need_by.get(sku, "")
+                release = _offset_date(due, -max(0, item.lead_time_days))
+                proposal = MrpProposal(
+                    proposal_no=f"MP-{sku}",
+                    item_sku=sku, proposal_type=ptype, quantity=round(net, 2),
+                    due_date=due, source_work_order=",".join(pegged.get(sku, [])),
+                    gross_qty=round(demand, 2), on_hand_qty=round(available, 2),
+                    on_order_qty=round(on_order, 2), safety_stock=round(safety, 2),
+                    pegged_orders=",".join(pegged.get(sku, [])), release_date=release,
+                )
+                proposals.append(proposal)
+
+                if make:
+                    # explode only the *net* production quantity into child demand
+                    for line in self._s.get_bom_lines(item.default_bom_code):
+                        add_demand(line.component_sku,
+                                   line.qty_per * (1.0 + line.scrap_rate) * net,
+                                   due, ",".join(pegged.get(sku, [])))
+
         with self._s.transaction():
             self._s.clear_proposals()
-            proposals: list[MrpProposal] = []
-            for wo in self._s.list_work_orders():
-                if wo.status not in (OrderStatus.RELEASED,):
-                    continue
-                for gap in self.bom_explode(wo.product_sku, wo.quantity):
-                    if gap["shortage"] > 0:
-                        item = self._s.get_item(gap["sku"])
-                        p = MrpProposal(
-                            proposal_no=f"MP-{wo.order_no}-{gap['sku']}",
-                            item_sku=gap["sku"], proposal_type=MrpProposalType.PURCHASE,
-                            quantity=gap["shortage"], due_date=wo.due_date,
-                            source_work_order=wo.order_no)
-                        self._s.insert_proposal(p)
-                        proposals.append(p)
-        return {"proposals": [_snapshot(p) for p in proposals],
-                "count": len(proposals)}
+            for proposal in proposals:
+                self._s.insert_proposal(proposal)
+
+        purchase = sum(1 for p in proposals if p.proposal_type == MrpProposalType.PURCHASE)
+        produce = len(proposals) - purchase
+        return {
+            "proposals": [_snapshot(p) for p in proposals],
+            "count": len(proposals),
+            "summary": {
+                "purchase_proposals": purchase,
+                "produce_proposals": produce,
+                "open_work_orders": len(work_orders),
+                "items_netted": len(gross),
+            },
+        }
+
+    def _bom_depth(self) -> dict[str, int]:
+        """BOM depth per SKU (raw=0), so parents are netted before children."""
+        memo: dict[str, int] = {}
+
+        def depth(sku: str, seen: frozenset[str]) -> int:
+            if sku in memo:
+                return memo[sku]
+            if sku in seen:
+                return 0
+            item = self._s.get_item(sku)
+            if not item or not item.default_bom_code:
+                memo[sku] = 0
+                return 0
+            lines = self._s.get_bom_lines(item.default_bom_code)
+            value = 0 if not lines else 1 + max(
+                depth(line.component_sku, seen | {sku}) for line in lines)
+            memo[sku] = value
+            return value
+
+        for item in self._s.list_items():
+            depth(item.sku, frozenset())
+        return memo
 
     def list_proposals(self, status: str | None = None) -> list[MrpProposal]:
         return self._s.list_proposals(status=status)
@@ -321,3 +431,13 @@ class ERPService:
 
 def _snapshot(obj: Any) -> dict[str, Any]:
     return asdict(obj)
+
+
+def _offset_date(text: str, days: int) -> str | None:
+    """Shift an ISO date by ``days`` (used for planned order release dates)."""
+    if not text:
+        return None
+    try:
+        return (date.fromisoformat(text) + timedelta(days=days)).isoformat()
+    except ValueError:
+        return None

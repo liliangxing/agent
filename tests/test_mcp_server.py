@@ -5,6 +5,8 @@ import sys
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
+from mes_scheduling_mcp import tool_catalog
+
 
 async def _session():
     env = dict(os.environ)
@@ -28,7 +30,8 @@ async def _tool_names(session):
 async def test_list_tools_over_stdio():
     async for session in _session():
         names = await _tool_names(session)
-        assert len(names) == 54
+        assert len(names) == len(tool_catalog.TOOLS) == 57
+        assert names == {t["name"] for t in tool_catalog.TOOLS}
         for expect in (
             "erp_list_work_orders",
             "erp_check_material_availability",
@@ -43,6 +46,9 @@ async def test_list_tools_over_stdio():
             "health_check",
             "list_resources",
             "get_resource_schema",
+            "mes_trace_lot",
+            "mes_list_consumptions",
+            "search_tools",
         ):
             assert expect in names
 

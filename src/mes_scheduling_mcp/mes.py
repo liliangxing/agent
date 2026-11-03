@@ -11,11 +11,15 @@ from dataclasses import asdict
 from datetime import datetime
 from typing import Any, Optional
 
+from .errors import ValidationError
 from .integration import Integration
 from .models import (
     DowntimeEvent,
     DowntimeReason,
     EventType,
+    ItemType,
+    LotGenealogyLink,
+    MaterialConsumption,
     MaterialIssue,
     OperationProgress,
     OperationStatus,
@@ -148,6 +152,7 @@ class MESService:
         po = self.get_production_order(production_order_no)
         ops = self.list_operations(production_order_no)
         ordered = sorted(ops, key=lambda o: o.operation_no)
+        was_completed = po.status == ProductionOrderStatus.COMPLETED
         with self._s.transaction():
             self._s.update_operation_progress(
                 production_order_no, operation_no, qty_good=qty_good, qty_bad=qty_bad)
@@ -165,6 +170,8 @@ class MESService:
                     self._s.update_work_center(
                         self._work_center_of(ordered, operation_no), status=WorkCenterStatus.IDLE,
                         current_production_order=None)
+                    if not was_completed:
+                        self._record_output_lot(production_order_no, qty_good, po)
                 else:
                     next_op = next(o for o in ordered if o.operation_no > operation_no)
                     self._s.update_operation_progress(
@@ -242,11 +249,71 @@ class MESService:
     def issue_material(self, production_order_no: str, item_sku: str, quantity: float) -> dict[str, Any]:
         po = self.get_production_order(production_order_no)
         with self._s.transaction():
-            self._s.reserve_inventory_by_sku(item_sku, quantity)
+            allocations = self._s.reserve_inventory_by_sku(item_sku, quantity)
             issue = MaterialIssue(issue_no=new_id("MI-", 10), production_order_no=production_order_no,
                                   item_sku=item_sku, quantity=quantity)
             self._s.insert_material_issue(issue)
-        return asdict(issue)
+            for alloc in allocations:
+                self._s.insert_consumption(MaterialConsumption(
+                    production_order_no=production_order_no, item_sku=item_sku,
+                    lot_no=alloc["lot_no"], quantity=alloc["quantity"]))
+        result = asdict(issue)
+        result["lots"] = allocations
+        return result
+
+    def list_consumptions(self, production_order_no: str | None = None) -> list[dict[str, Any]]:
+        return [asdict(c) for c in self._s.list_consumptions(production_order_no)]
+
+    def trace_lot(self, lot_no: str, direction: str = "both", max_depth: int = 10) -> dict[str, Any]:
+        if direction not in ("up", "down", "both"):
+            raise ValidationError("direction must be one of up/down/both")
+        parents: list[dict[str, Any]] = []
+        children: list[dict[str, Any]] = []
+        if direction in ("up", "both"):
+            parents = self._walk(lot_no, up=True, max_depth=max_depth)
+        if direction in ("down", "both"):
+            children = self._walk(lot_no, up=False, max_depth=max_depth)
+        return {"lot_no": lot_no, "direction": direction,
+                "parents": parents, "children": children,
+                "upstream_lots": sorted({p["parent_lot"] for p in parents} - {lot_no}),
+                "downstream_lots": sorted({c["child_lot"] for c in children} - {lot_no})}
+
+    def _walk(self, lot_no: str, *, up: bool, max_depth: int) -> list[dict[str, Any]]:
+        seen = {lot_no}
+        frontier = [lot_no]
+        edges: list[dict[str, Any]] = []
+        for _ in range(max(1, max_depth)):
+            next_frontier: list[str] = []
+            for lot in frontier:
+                links = self._s.genealogy_parents(lot) if up else self._s.genealogy_children(lot)
+                for link in links:
+                    nxt = link.parent_lot if up else link.child_lot
+                    edges.append({
+                        "parent_sku": link.parent_sku, "parent_lot": link.parent_lot,
+                        "child_sku": link.child_sku, "child_lot": link.child_lot,
+                        "production_order_no": link.production_order_no,
+                        "quantity": link.quantity, "depth": _,
+                    })
+                    if nxt not in seen:
+                        seen.add(nxt)
+                        next_frontier.append(nxt)
+            if not next_frontier:
+                break
+            frontier = next_frontier
+        return edges
+
+    def _record_output_lot(self, production_order_no: str, qty_good: float, po: ProductionOrder) -> None:
+        if qty_good <= 0:
+            return
+        item = self._s.get_item(po.product_sku)
+        warehouse = "WH-WIP" if item and item.item_type == ItemType.SEMI else "WH-FG"
+        lot_no = f"LOT-{production_order_no}"
+        self._s.upsert_inventory(po.product_sku, lot_no, warehouse, qty_good)
+        for c in self._s.list_consumptions(production_order_no):
+            self._s.insert_genealogy(LotGenealogyLink(
+                genealogy_id=new_id("LG-", 12), parent_sku=c.item_sku, parent_lot=c.lot_no,
+                child_sku=po.product_sku, child_lot=lot_no,
+                production_order_no=production_order_no, quantity=c.quantity))
 
     # --------------------------------------------------------------- helpers
     def _audit(self, operation: str, resource: str, resource_id: str,

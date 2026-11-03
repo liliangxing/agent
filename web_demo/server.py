@@ -16,6 +16,7 @@ from pathlib import Path
 
 from mes_scheduling_mcp.backend import ManufacturingBackend
 from mes_scheduling_mcp.store import Store
+from mes_scheduling_mcp import tool_catalog
 
 ROOT = Path(__file__).resolve().parent
 
@@ -77,25 +78,51 @@ def run_all() -> dict:
     # 报工：完成第一个激活的生产订单并回写 ERP
     released = backend.mes.list_production_orders(status="RELEASED")
     reported = []
+    target = None
     if released:
-        po = released[0]
-        backend.mes.start_production_order(po.production_order_no)
-        ops = sorted(backend.mes.list_operations(po.production_order_no),
+        target = sorted(released, key=lambda x: x.due_date or "")[0]
+        reqs = backend.erp.bom_explode(target.product_sku, target.quantity)
+        issued = []
+        for req in reqs:
+            try:
+                backend.mes.issue_material(target.production_order_no, req["sku"], req["required"])
+                issued.append(f"{req['sku']} x{req['required']}")
+            except Exception:
+                pass
+        steps.append({
+            "step": "7. 按 BOM 领料，按批次 FIFO 占用并记录批次谱系",
+            "tool": "mes_issue_material",
+            "result": issued,
+        })
+        backend.mes.start_production_order(target.production_order_no)
+        ops = sorted(backend.mes.list_operations(target.production_order_no),
                      key=lambda o: o.operation_no)
         for op in ops:
-            backend.mes.report_progress(po.production_order_no, op.operation_no,
-                                        qty_good=po.quantity, qty_bad=0, complete=True)
+            backend.mes.report_progress(target.production_order_no, op.operation_no,
+                                        qty_good=target.quantity, qty_bad=0, complete=True)
         progress = backend.synchronize_progress()
         reported = [f"{u['erp']} → 完工" for u in progress["updated"]]
     steps.append({
-        "step": "7. 报工并回写 ERP 完工",
+        "step": "8. 报工并回写 ERP 完工（末道工序生成成品批次）",
         "tool": "mes_report_progress + integration_sync_progress",
         "result": reported,
     })
 
+    if target:
+        trace = backend.mes.trace_lot(f"LOT-{target.production_order_no}", direction="up")
+        steps.append({
+            "step": "9. 成品批次向上追溯到来料批次",
+            "tool": "mes_trace_lot",
+            "result": {
+                "lot_no": trace["lot_no"],
+                "upstream_lots": trace["upstream_lots"],
+                "links": len(trace["parents"]),
+            },
+        })
+
     reconcile = backend.reconcile()
     steps.append({
-        "step": "8. 对账（ERP ↔ MES）",
+        "step": "10. 对账（ERP ↔ MES）",
         "tool": "integration_reconcile",
         "result": reconcile["summary"],
     })
@@ -160,63 +187,7 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
-TOOL_INFO = [
-    {"name": "erp_list_items", "group": "ERP", "desc": "查询物料主数据"},
-    {"name": "erp_get_item", "group": "ERP", "desc": "按 SKU 查询物料"},
-    {"name": "erp_create_item", "group": "ERP", "desc": "新建物料主数据"},
-    {"name": "erp_get_bom", "group": "ERP", "desc": "查询产品 BOM"},
-    {"name": "erp_bom_explode", "group": "ERP", "desc": "多级 BOM 展开与缺口计算"},
-    {"name": "erp_check_material_availability", "group": "ERP", "desc": "工单齐套检查"},
-    {"name": "erp_inventory_summary", "group": "ERP", "desc": "库存汇总"},
-    {"name": "erp_inventory_adjust", "group": "ERP", "desc": "库存出入库调整"},
-    {"name": "erp_list_sales_orders", "group": "ERP", "desc": "查询销售订单"},
-    {"name": "erp_create_sales_order", "group": "ERP", "desc": "新建销售订单"},
-    {"name": "erp_list_purchase_orders", "group": "ERP", "desc": "查询采购订单"},
-    {"name": "erp_create_purchase_order", "group": "ERP", "desc": "新建采购订单"},
-    {"name": "erp_receive_purchase_order", "group": "ERP", "desc": "采购收货"},
-    {"name": "erp_list_work_orders", "group": "ERP", "desc": "查询生产工单"},
-    {"name": "erp_get_work_order", "group": "ERP", "desc": "查询单个工单"},
-    {"name": "erp_create_work_order", "group": "ERP", "desc": "新建工单"},
-    {"name": "erp_release_work_order", "group": "ERP", "desc": "发布工单并广播 ORDER_RELEASE"},
-    {"name": "erp_complete_work_order", "group": "ERP", "desc": "标记工单完工"},
-    {"name": "erp_close_work_order", "group": "ERP", "desc": "关闭工单"},
-    {"name": "erp_run_mrp", "group": "ERP", "desc": "运行 MRP 净算"},
-    {"name": "erp_list_proposals", "group": "ERP", "desc": "查询 MRP 建议"},
-    {"name": "mes_list_work_centers", "group": "MES", "desc": "查询工作中心状态"},
-    {"name": "mes_get_work_center", "group": "MES", "desc": "查询单个工作中心"},
-    {"name": "mes_set_work_center_status", "group": "MES", "desc": "设置工作中心状态"},
-    {"name": "mes_list_shifts", "group": "MES", "desc": "查询班次日历"},
-    {"name": "mes_list_routings", "group": "MES", "desc": "查询工艺路线"},
-    {"name": "mes_get_routing", "group": "MES", "desc": "查询指定工艺路线"},
-    {"name": "mes_list_production_orders", "group": "MES", "desc": "查询 MES 生产订单"},
-    {"name": "mes_get_production_order", "group": "MES", "desc": "查询单个生产订单"},
-    {"name": "mes_list_operations", "group": "MES", "desc": "查询工序进度"},
-    {"name": "mes_start_production_order", "group": "MES", "desc": "生产订单开工"},
-    {"name": "mes_report_progress", "group": "MES", "desc": "报工/完工"},
-    {"name": "mes_report_downtime", "group": "MES", "desc": "上报设备停机"},
-    {"name": "mes_oee_report", "group": "MES", "desc": "设备综合效率 OEE"},
-    {"name": "mes_quality_inspect", "group": "MES", "desc": "质量检验登记"},
-    {"name": "mes_list_quality_records", "group": "MES", "desc": "查询质量检验记录"},
-    {"name": "mes_issue_material", "group": "MES", "desc": "生产领料/倒冲"},
-    {"name": "capacity_query", "group": "排产", "desc": "查询产能与班次"},
-    {"name": "schedule_generate", "group": "排产", "desc": "有限产能排产"},
-    {"name": "schedule_dispatch", "group": "排产", "desc": "下发排产计划"},
-    {"name": "schedule_detail", "group": "排产", "desc": "查询计划明细"},
-    {"name": "schedule_list", "group": "排产", "desc": "查询历史计划"},
-    {"name": "integration_sync_orders", "group": "集成", "desc": "ERP→MES 同步生产订单"},
-    {"name": "integration_sync_progress", "group": "集成", "desc": "MES→ERP 回写完工"},
-    {"name": "integration_reconcile", "group": "集成", "desc": "ERP↔MES 对账"},
-    {"name": "integration_outbox_status", "group": "集成", "desc": "查看发件箱事件"},
-    {"name": "integration_inbox_status", "group": "集成", "desc": "查看收件箱事件"},
-    {"name": "integration_mappings", "group": "集成", "desc": "查看双主键映射"},
-    {"name": "integration_audit_log", "group": "集成", "desc": "查询审计留痕"},
-    {"name": "list_resources", "group": "运维", "desc": "列出资源目录"},
-    {"name": "get_resource_schema", "group": "运维", "desc": "查看资源字段模型"},
-    {"name": "health_check", "group": "运维", "desc": "健康检查"},
-    {"name": "usage_stats", "group": "运维", "desc": "工具调用统计"},
-    {"name": "reset_demo_data", "group": "运维", "desc": "重置演示数据（admin）"},
-]
-
+TOOL_INFO = tool_catalog.as_dicts()
 
 def main() -> None:
     port = int(os.environ.get("PORT", "8000"))

@@ -298,6 +298,12 @@ class MrpProposal:
     due_date: str
     source_work_order: str | None = None
     status: str = "OPEN"
+    gross_qty: float = 0.0
+    on_hand_qty: float = 0.0
+    on_order_qty: float = 0.0
+    safety_stock: float = 0.0
+    pegged_orders: str = ""
+    release_date: str | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -394,6 +400,27 @@ class MaterialIssue:
     item_sku: str
     quantity: float
     issued_at: str = field(default_factory=_now)
+
+
+@dataclass
+class MaterialConsumption:
+    production_order_no: str
+    item_sku: str
+    lot_no: str
+    quantity: float
+    issued_at: str = field(default_factory=_now)
+
+
+@dataclass
+class LotGenealogyLink:
+    genealogy_id: str
+    parent_sku: str
+    parent_lot: str
+    child_sku: str
+    child_lot: str
+    production_order_no: str
+    quantity: float
+    created_at: str = field(default_factory=_now)
 
 
 # --------------------------------------------------------------------------- #

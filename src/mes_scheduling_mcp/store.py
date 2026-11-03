@@ -33,6 +33,8 @@ from .models import (
     ErpMesMapping,
     InventoryLot,
     Item,
+    LotGenealogyLink,
+    MaterialConsumption,
     MaterialIssue,
     MrpProposal,
     OperationProgress,
@@ -192,7 +194,13 @@ class Store:
                 quantity         REAL NOT NULL,
                 due_date         TEXT NOT NULL,
                 source_work_order TEXT,
-                status           TEXT NOT NULL DEFAULT 'OPEN'
+                status           TEXT NOT NULL DEFAULT 'OPEN',
+                gross_qty        REAL NOT NULL DEFAULT 0,
+                on_hand_qty      REAL NOT NULL DEFAULT 0,
+                on_order_qty     REAL NOT NULL DEFAULT 0,
+                safety_stock     REAL NOT NULL DEFAULT 0,
+                pegged_orders    TEXT NOT NULL DEFAULT '',
+                release_date     TEXT
             );
 
             -- ============================ MES ============================
@@ -282,6 +290,27 @@ class Store:
                 item_sku           TEXT NOT NULL,
                 quantity           REAL NOT NULL,
                 issued_at          TEXT NOT NULL
+            );
+
+            -- 批次谱系：领用了哪些批次、生产出哪个成品批次
+            CREATE TABLE IF NOT EXISTS material_consumptions (
+                production_order_no TEXT NOT NULL,
+                item_sku            TEXT NOT NULL,
+                lot_no              TEXT NOT NULL,
+                quantity            REAL NOT NULL,
+                issued_at           TEXT NOT NULL,
+                PRIMARY KEY (production_order_no, item_sku, lot_no, issued_at)
+            );
+
+            CREATE TABLE IF NOT EXISTS lot_genealogy (
+                genealogy_id        TEXT PRIMARY KEY,
+                parent_sku          TEXT NOT NULL,
+                parent_lot          TEXT NOT NULL,
+                child_sku           TEXT NOT NULL,
+                child_lot           TEXT NOT NULL,
+                production_order_no TEXT NOT NULL,
+                quantity            REAL NOT NULL,
+                created_at          TEXT NOT NULL
             );
 
             -- ============================ APS ============================
@@ -381,6 +410,25 @@ class Store:
             );
             """
         )
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Add columns introduced after the initial schema (file DB upgrades)."""
+        additions = {
+            "mrp_proposals": {
+                "gross_qty": "REAL NOT NULL DEFAULT 0",
+                "on_hand_qty": "REAL NOT NULL DEFAULT 0",
+                "on_order_qty": "REAL NOT NULL DEFAULT 0",
+                "safety_stock": "REAL NOT NULL DEFAULT 0",
+                "pegged_orders": "TEXT NOT NULL DEFAULT ''",
+                "release_date": "TEXT",
+            },
+        }
+        for table, columns in additions.items():
+            existing = {r["name"] for r in self.conn.execute(f"PRAGMA table_info({table})")}
+            for name, ddl in columns.items():
+                if name not in existing:
+                    self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
 
     def _seed_if_empty(self) -> None:
         cur = self.conn.execute("SELECT COUNT(*) AS n FROM work_orders")
@@ -514,9 +562,10 @@ class Store:
             "UPDATE inventory_lots SET reserved = reserved + ? WHERE sku = ?", (qty, sku)
         )
 
-    def reserve_inventory_by_sku(self, sku: str, qty: float) -> None:
-        """Reserve across lots, consuming the requested quantity."""
+    def reserve_inventory_by_sku(self, sku: str, qty: float) -> list[dict[str, Any]]:
+        """Reserve across lots (FIFO by lot no), returning the allocations."""
         remaining = qty
+        allocations: list[dict[str, Any]] = []
         rows = self.conn.execute(
             "SELECT lot_no, on_hand, reserved FROM inventory_lots WHERE sku = ? ORDER BY lot_no", (sku,)
         ).fetchall()
@@ -530,9 +579,11 @@ class Store:
                     "UPDATE inventory_lots SET reserved = reserved + ? WHERE sku = ? AND lot_no = ?",
                     (take, sku, r["lot_no"]),
                 )
+                allocations.append({"lot_no": r["lot_no"], "quantity": round(take, 4)})
                 remaining -= take
         if remaining > 0:
             raise IntegrityError(f"insufficient stock to reserve {sku} (short {remaining})")
+        return allocations
 
     # sales orders
     def list_sales_orders(self, status: str | None = None) -> list[SalesOrder]:
@@ -777,6 +828,35 @@ class Store:
             rows = self.conn.execute("SELECT * FROM material_issues ORDER BY issued_at")
         return [MaterialIssue(**dict(r)) for r in rows]
 
+    # lot traceability / genealogy
+    def insert_consumption(self, consumption: MaterialConsumption) -> None:
+        self._insert_many("material_consumptions", [consumption.__dict__])
+
+    def list_consumptions(self, production_order_no: str | None = None) -> list[MaterialConsumption]:
+        if production_order_no:
+            rows = self.conn.execute(
+                "SELECT * FROM material_consumptions WHERE production_order_no = ? ORDER BY issued_at",
+                (production_order_no,),
+            )
+        else:
+            rows = self.conn.execute("SELECT * FROM material_consumptions ORDER BY issued_at")
+        return [MaterialConsumption(**dict(r)) for r in rows]
+
+    def insert_genealogy(self, link: LotGenealogyLink) -> None:
+        self._insert_many("lot_genealogy", [link.__dict__])
+
+    def genealogy_children(self, parent_lot: str) -> list[LotGenealogyLink]:
+        rows = self.conn.execute(
+            "SELECT * FROM lot_genealogy WHERE parent_lot = ? ORDER BY created_at", (parent_lot,)
+        )
+        return [LotGenealogyLink(**dict(r)) for r in rows]
+
+    def genealogy_parents(self, child_lot: str) -> list[LotGenealogyLink]:
+        rows = self.conn.execute(
+            "SELECT * FROM lot_genealogy WHERE child_lot = ? ORDER BY created_at", (child_lot,)
+        )
+        return [LotGenealogyLink(**dict(r)) for r in rows]
+
     # ================================================================ APS ==
     def get_changeover(self, from_sku: str, to_sku: str) -> float:
         r = self.conn.execute(
@@ -954,6 +1034,7 @@ class Store:
         tables = [
             "audit_log", "reconciliation_runs", "idempotency_keys", "outbox_events", "inbox_events",
             "erp_mes_mapping", "schedule_operations", "schedule_plans", "changeover_matrix",
+            "material_consumptions", "lot_genealogy",
             "material_issues", "quality_records", "downtime_events", "operation_progress",
             "production_orders", "routing_operations", "shift_entries", "work_centers",
             "mrp_proposals", "work_orders", "purchase_orders", "sales_orders", "inventory_lots",

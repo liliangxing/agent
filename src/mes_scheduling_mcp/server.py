@@ -18,7 +18,7 @@ from typing import Any, Callable, Optional
 
 from mcp.server.fastmcp import Context, FastMCP
 
-from . import __version__, access, auth
+from . import __version__, access, auth, tool_catalog
 from .backend import ManufacturingBackend
 from .catalog import catalog_as_dict, get_spec
 from .errors import McpError, sanitize_error
@@ -376,6 +376,21 @@ def build_server(db_path: Optional[str] = None) -> FastMCP:
                         lambda: mes.issue_material(**data.model_dump()),
                         {"data": data.model_dump()})
 
+    @mcp.tool()
+    def mes_list_consumptions(production_order_no: str | None = None, ctx: Context = None) -> str:
+        """查询工单领料批次明细（用于批次追溯与成本归集）。"""
+        return _execute("mes_list_consumptions", "production_order", "read", ctx,
+                        lambda: mes.list_consumptions(production_order_no=production_order_no),
+                        {"production_order_no": production_order_no})
+
+    @mcp.tool()
+    def mes_trace_lot(lot_no: str, direction: str = "both", max_depth: int = 10,
+                      ctx: Context = None) -> str:
+        """批次谱系追溯：up 查来料批次，down 查受影响成品批次，both 双向。"""
+        return _execute("mes_trace_lot", "production_order", "read", ctx,
+                        lambda: mes.trace_lot(lot_no, direction=direction, max_depth=max_depth),
+                        {"lot_no": lot_no, "direction": direction, "max_depth": max_depth})
+
     # ==================================================================== APS
     @mcp.tool()
     def capacity_query(ctx: Context = None) -> str:
@@ -501,6 +516,16 @@ def build_server(db_path: Optional[str] = None) -> FastMCP:
             backend.reset()
             return {"status": "reset", **backend.health()}
         return _execute("reset_demo_data", "system", "reset", ctx, run)
+
+    @mcp.tool()
+    def search_tools(query: str | None = None, group: str | None = None,
+                     limit: int = 20, ctx: Context = None) -> str:
+        """按关键词/分组检索可用工具，便于 Agent 自助发现能力。"""
+        def run():
+            return {"query": query, "group": group,
+                    "results": tool_catalog.search(query=query, group=group, limit=limit)}
+        return _execute("search_tools", "system", "read", ctx, run,
+                        {"query": query, "group": group, "limit": limit})
 
     return mcp
 

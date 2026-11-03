@@ -61,3 +61,38 @@ def test_schedule_detail_and_dispatch(backend):
 def test_get_missing_schedule_raises(aps):
     with pytest.raises(KeyError):
         aps.schedule_detail("does-not-exist")
+
+
+def test_schedule_respects_shift_windows(backend):
+    backend.synchronize_orders()
+    result = backend.aps.generate_schedule()
+    plan_date = result["summary"]["plan_date"]
+    assert result["scheduled"]
+    # every operation starts at/after the first shift (08:00) and ends inside a
+    # working window boundary, never before the plan day.
+    assert all(o["start_time"] >= f"{plan_date} 08:00" for o in result["scheduled"])
+    # finite capacity pushes at least one operation past the first day
+    assert any(o["end_time"][:10] > plan_date for o in result["scheduled"])
+
+
+def test_changeover_matrix_applied(backend):
+    backend.synchronize_orders()
+    result = backend.aps.generate_schedule()
+    cnc = {o["erp_work_order_no"]: o for o in result["scheduled"]
+           if o["work_center"] == "CNC-01"}
+    # FG-1001 runs first on CNC-01 (initial routing setup 30), then FG-1004
+    # switches in via the changeover matrix (20 instead of routing 30).
+    assert cnc["WO-2026-0001"]["setup_min"] == 30.0
+    assert cnc["WO-2026-0004"]["setup_min"] == 20.0
+
+
+def test_dual_dates_and_lateness(backend):
+    backend.synchronize_orders()
+    result = backend.aps.generate_schedule()
+    dates = {d["erp_work_order_no"]: d for d in result["order_dates"]}
+    assert set(dates) == {"WO-2026-0001", "WO-2026-0003", "WO-2026-0004"}
+    for d in dates.values():
+        assert set(d) >= {"due_date", "projected_end", "lateness_hours", "on_time"}
+        assert d["on_time"] == (d["lateness_hours"] <= 0)
+    # objective is on-time delivery, so surface how many orders slipped
+    assert result["summary"]["on_time_orders"] + result["summary"]["late_orders"] == 3
