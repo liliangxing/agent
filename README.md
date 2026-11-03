@@ -12,7 +12,7 @@
 
 生产形态特性（对齐真实开源 ERP/MES MCP 项目的工程实践）：
 
-- **57 个领域 / 集成工具**：ERP（工单 / 物料 / BOM / 采购 / MRP）、MES（产线 / 排程 / 报工 / OEE / 质量）、排产（有限产能）、集成（幂等 / 发件箱 / 对账 / 审计），以及系统运维工具
+- **60 个领域 / 集成 / 网关工具**：ERP（工单 / 物料 / BOM / 采购 / MRP）、MES（产线 / 排程 / 报工 / OEE / 质量）、排产（有限产能）、集成（幂等 / 发件箱 / 对账 / 审计），以及系统运维工具
 - **严格入参校验**：Pydantic 模型 `extra="forbid"`，非法字段、缺字段直接报错
 - **鉴权 + RBAC**：API Key 鉴权与「资源 × 操作」访问控制矩阵，默认 fail-closed
 - **观测**：工具调用统计、JSONL 用量日志、错误脱敏
@@ -21,6 +21,8 @@
 - **APS 有限产能**：班次日历窗口槽位分配、跨班跨天排程、换型矩阵、双日期（计划完工 vs 订单交期）与迟单统计
 - **MRP 净算**：跨工单聚合需求、按 BOM 深度逐层净算、计入安全库存 / 在途 / 开放采购，半成品自动转生产建议
 - **批次谱系追溯**：领料按批次 FIFO 占用，完工生成成品批次，支持上游来料与下游成品双向追溯
+- **Agent 友好工具面**：`search_tools` → `describe_tool` → `call_tool` 三步发现与调用；列表结果默认 25 行、最多 100 行 / 20000 字符，支持 `fields` 字段投影、`offset` 翻页与 `truncate` 关闭预算
+- **读写分级**：每个工具带 MCP annotations（`readOnlyHint` / `destructiveHint` / `idempotentHint`），破坏性调用必须走 `call_destructive_tool` 并可被客户端提前确认
 
 ---
 
@@ -28,7 +30,7 @@
 
 - [案例背景（01 案例）](#案例背景01-案例)
 - [架构](#架构)
-- [能力清单（57 个工具）](#能力清单57-个工具)
+- [能力清单（60 个工具）](#能力清单60-个工具)
 - [快速开始](#快速开始)
 - [鉴权与访问控制](#鉴权与访问控制)
 - [接入 AI 客户端](#接入-ai-客户端)
@@ -68,7 +70,7 @@ ERP 当日工单  →  齐套检查  →  产能查询  →  自动排产  →  
 ```mermaid
 flowchart LR
     A["AI 排产 Agent"]
-    S["MES Scheduling MCP Server (57 工具)"]
+    S["MES Scheduling MCP Server (60 工具)"]
     B["ManufacturingBackend 门面"]
     ER["ERP 领域 (工单 / 物料 / BOM / 采购 / MRP)"]
     AP["排产引擎 APSService (齐套 + 有限产能 + 换型)"]
@@ -141,7 +143,7 @@ APS 三域与集成工程的统一门面，便于单测与替换成真实 ERP / 
 
 ---
 
-## 能力清单（57 个工具）
+## 能力清单（60 个工具）
 
 ### ERP 工具（21 个）
 
@@ -204,7 +206,15 @@ APS 三域与集成工程的统一门面，便于单测与替换成真实 ERP / 
 | `health_check` | 服务健康检查与运行统计 |
 | `usage_stats` | 工具调用统计（次数 / 成败 / 耗时 / 错误类型） |
 | `reset_demo_data` | 重置演示数据到种子状态（需要 admin 权限） |
-| `search_tools` | 按关键词 / 分组检索工具面，便于 Agent 自助发现 |
+| `search_tools` | 按关键词 / 分组 / 读写分类检索工具面，便于 Agent 自助发现 |
+
+### 网关工具（3 个）
+
+| 工具 | 说明 |
+| --- | --- |
+| `describe_tool` | 查看一个或多个工具的完整契约（描述、注解、入参 schema） |
+| `call_tool` | 按名称调用 READ/WRITE 工具，支持 `fields` 投影、`limit/offset` 分页与字符预算 |
+| `call_destructive_tool` | 调用 DESTRUCTIVE 工具（删除 / 重置），与 `call_tool` 分离 |
 
 ---
 
@@ -231,6 +241,15 @@ MES_MCP_DB=data/mes.db mes-mcp
 ```
 
 首次启动会自动建表并写入演示种子数据（1 个刻意缺料的工单用于演示齐套缺口）。
+
+如需 carbon 风格的「薄网关」形态，只向客户端暴露 4 个元工具，57 个领域工具全部经
+`call_tool` 调用：
+
+```bash
+MES_MCP_GATEWAY_ONLY=1 mes-mcp
+```
+
+默认同时暴露领域工具与网关工具，便于客户端渐进迁移。
 
 ---
 
@@ -286,7 +305,7 @@ python examples/scheduling_agent_demo.py
 ```
 
 输出会依次展示：同步工单 → 齐套检查（法兰盘缺切削液）→ 查产能 → 排产（3 单排入、1 单缺料）
-→ 下发 → 按 BOM 领料 → 报工 → 批次追溯 → 对账。
+→ MRP 净算 → 下发 → 按 BOM 领料 → 报工 → 批次追溯 → 对账。
 
 另外提供一个手机可访问的 HTTP 演示，直接复用 `ManufacturingBackend` 门面（与 MCP 工具同一套代码）：
 
@@ -328,8 +347,10 @@ docker run --rm -v "$PWD/data:/data" -e MES_MCP_DB=/data/mes.db mes-scheduling-m
 ```
 .
 ├── src/mes_scheduling_mcp/
-│   ├── server.py        # MCP 工具层（57 个领域/集成/运维工具 + 鉴权 + RBAC + 观测）
+│   ├── server.py        # MCP 工具层（60 个领域/集成/网关工具 + 鉴权 + RBAC + 观测）
 │   ├── tool_catalog.py  # 工具清单单一来源（search_tools 与 Web 演示共用）
+│   ├── gateway.py       # 薄网关：search / describe / call / call_destructive
+│   ├── formatting.py    # 结果整形：分页 / 字段投影 / 去 null / 字符预算
 │   ├── schemas.py       # 严格 Pydantic 入参模型（extra="forbid"）
 │   ├── errors.py        # McpError 分层错误 + 脱敏
 │   ├── auth.py          # API Key 鉴权（可选）

@@ -14,11 +14,13 @@ and error sanitization.  Pydantic inputs reject unknown fields.
 from __future__ import annotations
 
 import json
+import os
 from typing import Any, Callable, Optional
 
 from mcp.server.fastmcp import Context, FastMCP
+from mcp.types import ToolAnnotations
 
-from . import __version__, access, auth, tool_catalog
+from . import __version__, access, auth, gateway, tool_catalog
 from .backend import ManufacturingBackend
 from .catalog import catalog_as_dict, get_spec
 from .errors import McpError, sanitize_error
@@ -58,7 +60,8 @@ def _extract_api_key(ctx: Optional[Context]) -> Optional[str]:
     return value.removeprefix("Bearer ").strip()
 
 
-def build_server(db_path: Optional[str] = None) -> FastMCP:
+def build_server(db_path: Optional[str] = None,
+                 backend: Optional[ManufacturingBackend] = None) -> FastMCP:
     mcp = FastMCP(
         "mes-scheduling",
         instructions=(
@@ -67,10 +70,14 @@ def build_server(db_path: Optional[str] = None) -> FastMCP:
             "integration_sync_orders 同步到 MES → schedule_generate 有限产能排产 → "
             "schedule_dispatch 下发 → mes_report_progress 报工 → integration_sync_progress 回写 ERP → "
             "integration_reconcile 对账。"
+            "工具面同时提供薄网关：search_tools 发现 → describe_tool 读契约 → "
+            "call_tool 调用（支持 fields/limit/offset/truncate 结果整形）；"
+            "DESTRUCTIVE 工具必须走 call_destructive_tool。"
+            "列表读取默认 25 行、最多 100 行 / 20000 字符，返回 total 以便翻页。"
         ),
     )
 
-    backend = ManufacturingBackend(Store(db_path))
+    backend = backend or ManufacturingBackend(Store(db_path))
     erp = backend.erp
     mes = backend.mes
     aps = backend.aps
@@ -519,13 +526,64 @@ def build_server(db_path: Optional[str] = None) -> FastMCP:
 
     @mcp.tool()
     def search_tools(query: str | None = None, group: str | None = None,
-                     limit: int = 20, ctx: Context = None) -> str:
-        """按关键词/分组检索可用工具，便于 Agent 自助发现能力。"""
+                     classification: str | None = None, limit: int = 20, offset: int = 0,
+                     ctx: Context = None) -> str:
+        """按关键词/分组/读写分类检索可用工具，便于 Agent 自助发现能力。"""
         def run():
-            return {"query": query, "group": group,
-                    "results": tool_catalog.search(query=query, group=group, limit=limit)}
+            return gateway.search(mcp._tool_manager, query=query, group=group,
+                                  classification=classification, limit=limit, offset=offset,
+                                  registry=mcp._gateway_registry)
         return _execute("search_tools", "system", "read", ctx, run,
-                        {"query": query, "group": group, "limit": limit})
+                        {"query": query, "group": group, "classification": classification,
+                         "limit": limit, "offset": offset})
+
+    # ------------------------------------------------------------ meta gateway
+    @mcp.tool()
+    async def describe_tool(name: str | None = None, names: list[str] | None = None,
+                            ctx: Context = None) -> str:
+        """查看一个或多个工具（最多 10 个）的完整契约：描述、分类、注解、入参 schema。"""
+        requested = list(names) if names else ([name] if name else [])
+        return _json(gateway.describe(mcp._tool_manager, requested, registry=mcp._gateway_registry))
+
+    @mcp.tool()
+    async def call_tool(name: str, arguments: Any = None,
+                        fields: list[str] | None = None, limit: int | None = None,
+                        offset: int = 0, truncate: bool = True,
+                        ctx: Context = None) -> str:
+        """按名称调用 READ/WRITE 工具；支持 fields 投影、limit/offset 分页与字符预算。"""
+        result = await gateway.call(
+            mcp._tool_manager, name, arguments=arguments, fields=fields, limit=limit,
+            offset=offset, truncate=truncate, context=ctx, destructive=False,
+            registry=mcp._gateway_registry)
+        return _json(result)
+
+    @mcp.tool()
+    async def call_destructive_tool(name: str, arguments: Any = None,
+                                    fields: list[str] | None = None, limit: int | None = None,
+                                    offset: int = 0, truncate: bool = True,
+                                    ctx: Context = None) -> str:
+        """调用 DESTRUCTIVE 工具（删除/重置）；普通工具请走 call_tool。"""
+        result = await gateway.call(
+            mcp._tool_manager, name, arguments=arguments, fields=fields, limit=limit,
+            offset=offset, truncate=truncate, context=ctx, destructive=True,
+            registry=mcp._gateway_registry)
+        return _json(result)
+
+    # Attach READ/WRITE/DESTRUCTIVE annotations to every registered tool so
+    # clients can gate destructive calls before they run.
+    for tool in mcp._tool_manager.list_tools():
+        hints = gateway.annotation_hints(tool_catalog.classification(tool.name))
+        tool.annotations = ToolAnnotations(**hints)
+
+    registry = {tool.name: tool for tool in mcp._tool_manager.list_tools()}
+    mcp._gateway_registry = registry
+
+    # Optional thin-gateway deployment: hide the explicit domain tools from
+    # list_tools while keeping them dispatchable through call_tool.
+    if os.environ.get("MES_MCP_GATEWAY_ONLY", "").lower() in ("1", "true", "yes"):
+        for name in list(registry):
+            if name not in gateway.META_TOOLS:
+                mcp._tool_manager.remove_tool(name)
 
     return mcp
 

@@ -69,24 +69,80 @@ TOOLS: list[dict[str, str]] = [
     {"name": "health_check", "group": "运维", "description": "健康检查"},
     {"name": "usage_stats", "group": "运维", "description": "工具调用统计"},
     {"name": "reset_demo_data", "group": "运维", "description": "重置演示数据（admin）"},
-    {"name": "search_tools", "group": "运维", "description": "按关键词检索工具面，便于 Agent 自助发现"},
+    {"name": "search_tools", "group": "运维", "description": "按关键词/分组/读写分类检索工具面，便于 Agent 自助发现"},
+    # ------------------------------------------------------------- gateway
+    {"name": "describe_tool", "group": "网关", "description": "查看一个或多个工具的完整契约（描述、注解、入参 schema）"},
+    {"name": "call_tool", "group": "网关", "description": "按名称调用 READ/WRITE 工具，支持字段投影、分页与截断"},
+    {"name": "call_destructive_tool", "group": "网关", "description": "调用 DESTRUCTIVE 工具（删除/重置），与 call_tool 分离"},
 ]
 
-GROUPS: list[str] = ["ERP", "MES", "排产", "集成", "运维"]
+GROUPS: list[str] = ["ERP", "MES", "排产", "集成", "运维", "网关"]
 
 
-def search(query: str | None = None, group: str | None = None, limit: int = 20) -> list[dict[str, str]]:
-    """Case-insensitive search over name/description, optionally filtered by group."""
+_DESTRUCTIVE = {"reset_demo_data", "call_destructive_tool"}
+
+_READ_EXACT = {
+    "capacity_query",
+    "erp_bom_explode",
+    "erp_check_material_availability",
+    "erp_list_proposals",
+    "health_check",
+    "integration_audit_log",
+    "integration_inbox_status",
+    "integration_mappings",
+    "integration_outbox_status",
+    "integration_reconcile",
+    "list_resources",
+    "get_resource_schema",
+    "mes_list_consumptions",
+    "mes_oee_report",
+    "mes_trace_lot",
+    "schedule_detail",
+    "schedule_list",
+    "search_tools",
+    "describe_tool",
+    "usage_stats",
+}
+
+
+def classification(name: str) -> str:
+    """READ / WRITE / DESTRUCTIVE, used for annotations and the gateway split."""
+    if name in _DESTRUCTIVE:
+        return "DESTRUCTIVE"
+    if name in _READ_EXACT or name.startswith(("search_", "describe_")):
+        return "READ"
+    if {"list", "get"} & set(name.split("_")):
+        return "READ"
+    return "WRITE"
+
+
+def entry(tool: dict[str, str]) -> dict[str, str]:
+    return {**tool, "classification": classification(tool["name"])}
+
+
+def get(name: str) -> dict[str, str] | None:
+    for tool in TOOLS:
+        if tool["name"] == name:
+            return entry(tool)
+    return None
+
+
+def search(query: str | None = None, group: str | None = None,
+           classification_filter: str | None = None) -> list[dict[str, str]]:
+    """Case-insensitive search over name/description with optional filters."""
     token = (query or "").strip().lower()
     results: list[dict[str, str]] = []
     for tool in TOOLS:
         if group and tool["group"] != group:
             continue
+        item = entry(tool)
+        if classification_filter and item["classification"] != classification_filter:
+            continue
         if token and token not in tool["name"].lower() and token not in tool["description"].lower():
             continue
-        results.append(tool)
-    return results[: max(1, limit)]
+        results.append(item)
+    return results
 
 
 def as_dicts() -> list[dict[str, Any]]:
-    return [dict(t, desc=t["description"]) for t in TOOLS]
+    return [dict(entry(t), desc=t["description"]) for t in TOOLS]
