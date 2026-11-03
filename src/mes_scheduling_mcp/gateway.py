@@ -55,14 +55,17 @@ def _schemas(manager: Any, registry: dict[str, Any] | None = None) -> list[str]:
 
 
 def search(manager: Any, query: str | None = None, group: str | None = None,
-           classification: str | None = None, limit: int = 20,
+           classification: str | None = None, risk_class: str | None = None,
+           requires_approval: bool | None = None, limit: int = 20,
            offset: int = 0, registry: dict[str, Any] | None = None) -> dict[str, Any]:
     registered = set(_schemas(manager, registry))
-    results = [item for item in tool_catalog.search(query, group, classification)
+    results = [item for item in tool_catalog.search(
+                   query, group, classification, risk_class, requires_approval)
                if item["name"] in registered]
     total = len(results)
     page = results[offset: offset + max(1, limit)]
     return {"query": query, "group": group, "classification": classification,
+            "risk_class": risk_class, "requires_approval": requires_approval,
             "total": total, "offset": offset, "limit": limit, "results": page}
 
 
@@ -88,6 +91,9 @@ def describe(manager: Any, names: list[str],
             "group": entry.get("group", ""),
             "description": tool.description or entry.get("description", ""),
             "classification": classification,
+            "risk_class": entry.get("risk_class", tool_catalog.risk_class_for(name)),
+            "requires_approval": entry.get(
+                "requires_approval", tool_catalog.requires_approval_for(name)),
             "annotations": annotation_hints(classification),
             "required": schema.get("required", []),
             "input_schema": schema,
@@ -169,6 +175,8 @@ async def call(manager: Any, name: str, arguments: Any = None,
     shaped = shape(data, fields=fields, limit=limit, offset=offset, truncate=truncate)
     shaped["tool"] = name
     shaped["classification"] = classification
+    shaped["risk_class"] = tool_catalog.risk_class_for(name)
+    shaped["requires_approval"] = tool_catalog.requires_approval_for(name)
     shaped["annotations"] = annotation_hints(classification)
     shaped["budget"] = {"max_rows": MAX_ROWS, "max_chars": MAX_CHARS, "truncate": truncate}
     return shaped

@@ -257,6 +257,171 @@ def run_all() -> dict:
     }
 
 
+_DOWNTIME_LABEL = {
+    "BREAKDOWN": "设备故障",
+    "MAINTENANCE": "计划保养",
+    "SETUP": "换型准备",
+    "QUALITY_STOP": "质量停线",
+    "MATERIAL_SHORTAGE": "缺料停线",
+    "IDLE": "待料",
+}
+
+
+def _execution_rows(backend, production_orders, runs, tests, downtime):
+    rows = []
+    for po in production_orders:
+        po_no = po["production_order_no"]
+        po_runs = [r for r in runs if r["production_order_no"] == po_no]
+        routing = {op["operation_no"]: op for op in
+                   backend.mes.list_routings(product_sku=po["product_sku"])}
+        progress = sorted(backend.mes.list_operations(po_no),
+                          key=lambda o: o.operation_no)
+        operations = []
+        for op in progress:
+            route = routing.get(op.operation_no, {})
+            op_runs = [r for r in po_runs if r["operation_no"] == op.operation_no]
+            operations.append({
+                "operation_no": op.operation_no,
+                "name": route.get("operation_name", f"OP{op.operation_no}"),
+                "work_center": op.work_center,
+                "status": str(op.status),
+                "qty_good": op.qty_good,
+                "qty_bad": op.qty_bad,
+                "inspection_required": bool(route.get("inspection_required")),
+                "instructions": route.get("instructions", ""),
+                "run_count": len(op_runs),
+                "downtime_min": round(sum(
+                    r["duration_min"] for r in downtime
+                    if r.get("run_no") in {x["run_no"] for x in op_runs}), 1),
+            })
+        completed = [o for o in operations if o["status"] == "COMPLETED"]
+        current_op = next((o for o in operations if o["status"] != "COMPLETED"), None)
+        last_op = max((o["operation_no"] for o in operations), default=0)
+        last_good = max((r["qty_good"] for r in po_runs
+                         if r["operation_no"] == last_op), default=0)
+        po_tests = [t for t in tests if t["production_order_no"] == po_no]
+        rows.append({
+            "production_order_no": po_no,
+            "erp_work_order_no": po["erp_work_order_no"],
+            "product_sku": po["product_sku"],
+            "product_name": po["product_name"],
+            "quantity": po["quantity"],
+            "completed_qty": po["completed_qty"] or last_good,
+            "status": str(po["status"]),
+            "due_date": po["due_date"],
+            "lot_no": f"LOT-{po_no}",
+            "progress": round(len(completed) / len(operations), 3) if operations else 0,
+            "current_operation": current_op,
+            "operations": operations,
+            "runs": len(po_runs),
+            "scrap_qty": sum(r["qty_scrap"] for r in po_runs),
+            "tests": len(po_tests),
+            "test_fails": sum(1 for t in po_tests if str(t["result"]) == "FAIL"),
+            "downtime_min": round(sum(
+                d["duration_min"] for d in downtime
+                if d.get("run_no") in {r["run_no"] for r in po_runs}), 1),
+        })
+    order = {"IN_PROCESS": 0, "RELEASED": 1, "COMPLETED": 2}
+    rows.sort(key=lambda x: (order.get(x["status"], 3), x["due_date"]))
+    return rows
+
+
+def _andon_items(shortages, late_orders, downtime, tests, spc):
+    items = []
+    for d in downtime:
+        planned = bool(d["planned"])
+        severity = "info" if planned else (
+            "critical" if str(d["reason"]) == "BREAKDOWN" else "warning")
+        items.append({
+            "severity": severity,
+            "source": d["work_center"],
+            "title": _DOWNTIME_LABEL.get(str(d["reason"]), str(d["reason"])),
+            "detail": f"{d['duration_min']:.0f} 分钟 · {'计划停机' if planned else '非计划停机'}",
+            "time": d["start_time"],
+            "status": "已恢复" if not planned else "已计划",
+        })
+    fails = [t for t in tests if str(t["result"]) == "FAIL"]
+    by_code: dict[str, list] = {}
+    for t in fails:
+        by_code.setdefault(t["defect_code"] or "UNSPECIFIED", []).append(t)
+    for code, rows in by_code.items():
+        items.append({
+            "severity": "critical" if len(rows) >= 2 else "warning",
+            "source": "CMM-01",
+            "title": f"质量异常 {code}",
+            "detail": f"{len(rows)} 件不良 · {rows[0]['defect_desc'] or '终检拦截'}",
+            "time": rows[0]["tested_at"],
+            "status": "待处置",
+        })
+    for row in spc.get("characteristics", []):
+        if row.get("cpk") is not None and row["cpk"] < 1.0:
+            items.append({
+                "severity": "warning",
+                "source": "SPC",
+                "title": f"过程能力不足 {row['characteristic']}",
+                "detail": f"Cpk {row['cpk']:.2f} < 1.00 · 超差 {row['out_of_spec']} 件",
+                "time": "",
+                "status": "待改善",
+            })
+    for shortage in shortages:
+        detail = " / ".join(
+            f"{x['sku']} 缺 {x['shortage']:.1f}" for x in shortage.get("shortages", []))
+        items.append({
+            "severity": "critical",
+            "source": shortage["order_no"],
+            "title": "齐套缺口，工单未排入",
+            "detail": detail or "物料不足",
+            "time": "",
+            "status": "采购在途",
+        })
+    for row in late_orders:
+        items.append({
+            "severity": "warning",
+            "source": row["erp_work_order_no"],
+            "title": "预计迟单",
+            "detail": f"延迟 {row['lateness_hours']:.1f} 小时 · 交期 {row['due_date']}",
+            "time": "",
+            "status": "待排产",
+        })
+    rank = {"critical": 0, "warning": 1, "info": 2}
+    items.sort(key=lambda x: rank.get(x["severity"], 3))
+    return {
+        "items": items[:10],
+        "critical": sum(1 for x in items if x["severity"] == "critical"),
+        "warning": sum(1 for x in items if x["severity"] == "warning"),
+        "info": sum(1 for x in items if x["severity"] == "info"),
+    }
+
+
+def _oee_loss(oee_rows):
+    planned = sum(x["planned_minutes"] for x in oee_rows)
+    run = sum(x["run_minutes"] for x in oee_rows)
+    ideal = sum(x.get("ideal_minutes", 0) for x in oee_rows)
+    good = sum(x["good"] for x in oee_rows)
+    scrap = sum(x["scrap"] for x in oee_rows)
+    availability = run / planned if planned else 0
+    performance = min(1.0, ideal / run) if run else 0
+    quality = good / (good + scrap) if (good + scrap) else 0
+    oee = availability * performance * quality
+    return {
+        "oee": round(oee, 3),
+        "availability": round(availability, 3),
+        "performance": round(performance, 3),
+        "quality": round(quality, 3),
+        "availability_loss": round(1 - availability, 3),
+        "performance_loss": round(availability * (1 - performance), 3),
+        "quality_loss": round(availability * performance * (1 - quality), 3),
+        "availability_loss_min": round(max(0, planned - run), 1),
+        "performance_loss_min": round(max(0, run - ideal), 1),
+        "quality_loss_min": round(ideal * (scrap / (good + scrap)) if good + scrap else 0, 1),
+        "planned_minutes": round(planned, 1),
+        "run_minutes": round(run, 1),
+        "ideal_minutes": round(ideal, 1),
+        "good": good,
+        "scrap": scrap,
+    }
+
+
 def build_state() -> dict:
     work_centers = _records(backend.mes.list_work_centers())
     production_orders = _records(backend.mes.list_production_orders())
@@ -267,6 +432,11 @@ def build_state() -> dict:
     summary = plan["summary"] if plan else {}
     shifts = _records(backend.mes.list_shifts())
     shift_date = shifts[0]["shift_date"] if shifts else None
+    day_shift = next((x for x in shifts if x.get("shift_no") == "DAY"), shifts[0] if shifts else {})
+
+    runs = _records(backend.mes.list_runs())
+    tests = _records(backend.mes.list_tests())
+    downtime = backend.mes.list_downtime()
 
     oee = [backend.mes.oee_report(work_center=wc["code"]) for wc in work_centers]
     active_oee = [x for x in oee if x["runs"]]
@@ -274,6 +444,42 @@ def build_state() -> dict:
     yield_report = backend.mes.yield_report()
     spc = backend.mes.spc_report()
     cpk_values = [row["cpk"] for row in spc["characteristics"] if row["cpk"] is not None]
+    for row in spc["characteristics"]:
+        row["points"] = [
+            {"unit_ref": t["unit_ref"], "measured": t["measured"],
+             "result": str(t["result"]), "tested_at": t["tested_at"]}
+            for t in tests if t["characteristic"] == row["characteristic"]
+        ]
+
+    execution = _execution_rows(backend, production_orders, runs, tests, downtime)
+    executed = [x for x in execution if x["runs"]]
+    late_orders = [x for x in STATE.get("order_dates", []) if not x.get("on_time", True)]
+    andon = _andon_items(STATE.get("shortages", []), late_orders, downtime, tests, spc)
+    oee_loss = _oee_loss(oee)
+
+    planned_qty = sum(x["quantity"] for x in executed)
+    good_qty = sum(x["completed_qty"] for x in executed)
+    scrap_qty = sum(x["scrap_qty"] for x in executed)
+    shift_detail = {
+        "date": shift_date,
+        "shift_no": day_shift.get("shift_no", "DAY"),
+        "window": f"{day_shift.get('start_time', '08:00')}-{day_shift.get('end_time', '16:00')}",
+        "team": "一号线 A 班",
+        "work_centers": len(work_centers),
+        "planned_qty": planned_qty,
+        "good_qty": good_qty,
+        "scrap_qty": scrap_qty,
+        "attainment": round(good_qty / planned_qty, 3) if planned_qty else 0,
+        "fpy": yield_report["first_pass_yield"],
+        "oee": oee_avg,
+        "downtime_min": round(sum(d["duration_min"] for d in downtime), 1),
+        "unplanned_downtime_min": round(
+            sum(d["duration_min"] for d in downtime if not d["planned"]), 1),
+        "downtime_events": len(downtime),
+        "tests": yield_report["tested"],
+        "defects": yield_report["failed"],
+        "late_orders": len(late_orders),
+    }
 
     trace = None
     if STATE.get("target_po"):
@@ -299,11 +505,19 @@ def build_state() -> dict:
                            if str(p["status"]) in ("RELEASED", "IN_PROCESS")]),
         "shortage_orders": summary.get("shortage_orders", 0),
         "makespan_min": summary.get("makespan_min", 0),
+        "planned_qty": planned_qty,
+        "good_qty": good_qty,
+        "scrap_qty": scrap_qty,
+        "attainment": shift_detail["attainment"],
+        "downtime_min": shift_detail["downtime_min"],
+        "unplanned_downtime_min": shift_detail["unplanned_downtime_min"],
+        "andon_critical": andon["critical"],
+        "andon_warning": andon["warning"],
     }
 
     return {
         "ran_at": STATE.get("ran_at"),
-        "shift": {"date": shift_date, "work_centers": len(work_centers)},
+        "shift": shift_detail,
         "health": backend.health(),
         "kpis": kpis,
         "summary": summary,
@@ -322,10 +536,16 @@ def build_state() -> dict:
         },
         "trace": trace,
         "recall": recall,
-        "runs": _records(backend.mes.list_runs()),
+        "runs": runs,
+        "downtime": downtime,
+        "execution": execution,
+        "andon": andon,
+        "oee_loss": oee_loss,
+        "shift_detail": shift_detail,
+        "manifest": tool_catalog.manifest_summary(),
         "quality": {
             "records": _records(backend.mes.list_quality_records()),
-            "tests": _records(backend.mes.list_tests()),
+            "tests": tests,
             "yield": yield_report,
             "spc": spc,
         },
@@ -382,6 +602,7 @@ class Handler(BaseHTTPRequestHandler):
                 "tools": tool_catalog.as_dicts(),
                 "groups": tool_catalog.GROUPS,
                 "total": len(tool_catalog.TOOLS),
+                "manifest": tool_catalog.manifest_summary(),
             },
         }
         handler = routes.get(parsed.path)

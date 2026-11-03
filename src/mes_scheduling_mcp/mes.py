@@ -114,6 +114,10 @@ class MESService:
         return self._s.list_runs(production_order_no=production_order_no,
                                  work_center=work_center, status=status)
 
+    def list_downtime(self, work_center: str | None = None,
+                      run_no: str | None = None) -> list[Any]:
+        return [asdict(e) for e in self._s.list_downtime(work_center=work_center, run_no=run_no)]
+
     def get_run(self, run_no: str) -> ProductionRun:
         run = self._s.get_run(run_no)
         if not run:
@@ -396,6 +400,7 @@ class MESService:
             "oee": round(oee, 3),
             "planned_minutes": round(planned_prod, 1),
             "run_minutes": round(run_time, 1),
+            "ideal_minutes": round(ideal_minutes, 1),
             "planned_downtime_min": round(planned_dt, 1),
             "unplanned_downtime_min": round(unplanned_dt, 1),
             "downtime_min": round(planned_dt + unplanned_dt, 1),

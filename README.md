@@ -141,6 +141,28 @@ MCP 工具层 (server.py)
 MCP 协议边界只出现在 `server.py`，领域逻辑与 MCP 解耦；`ManufacturingBackend` 是 ERP / MES /
 APS 三域与集成工程的统一门面，便于单测与替换成真实 ERP / MES 接口。
 
+运行与 OEE 数据流（`ProductionOrder → Operation → ProductionRun → 停机/检测`）：
+
+```mermaid
+flowchart LR
+    WO["ERP WorkOrder"] --> PO["MES ProductionOrder"]
+    PO --> OP["Operation 工序进度"]
+    OP --> RUN["ProductionRun 报工"]
+    RUN --> DT["DowntimeEvent 停机"]
+    RUN --> TR["TestRecord 检测"]
+    RUN --> OUT["qty_good / qty_scrap 产出"]
+    DT --> OEE["OEE = A × P × Q"]
+    OUT --> OEE
+    TR --> SPC["SPC / Cp / Cpk"]
+    TR --> FPY["一次合格率 / 缺陷 Pareto"]
+    OUT --> LOT["成品批次谱系"]
+    LOT --> RECALL["批次召回"]
+    OEE --> LOSS["损失分钟归因"]
+```
+
+OEE、FPY、SPC、召回均在查询时按 run / 检测记录实时计算，不落聚合表；演示页与服务端共用同一份
+`build_state` 读模型，避免展示值与接口值漂移。
+
 ---
 
 ## 能力清单（73 个工具）
@@ -217,6 +239,31 @@ APS 三域与集成工程的统一门面，便于单测与替换成真实 ERP / 
 | `usage_stats` | 工具调用统计（次数 / 成败 / 耗时 / 错误类型） |
 | `reset_demo_data` | 重置演示数据到种子状态（需要 admin 权限） |
 | `search_tools` | 按关键词 / 分组 / 读写分类检索工具面，便于 Agent 自助发现 |
+
+### Manifest 与风险分级
+
+工具清单以 `tool_catalog.py` 为唯一来源，MCP 注册、`search_tools` / `describe_tool` 与 Web 演示共用，
+不存在第二份清单。每个工具在名称、分组、描述之外再派生两个治理字段：
+
+| 字段 | 取值 | 含义 |
+| --- | --- | --- |
+| `risk_class` | `read_only` / `internal_write` / `destructive` | 与 READ / WRITE / DESTRUCTIVE 一一对应 |
+| `requires_approval` | `true` / `false` | 平台执行前是否必须经过审批门禁 |
+
+服务级 manifest：`server_id=mcp_mes`、`risk_level=medium`、`writes_allowed=gated`、
+`governance_gates=["tool_approval","rbac"]`、`transports=["stdio","http"]`。
+
+当前需审批的 7 个工具：`erp_release_work_order`、`erp_close_work_order`、`erp_cancel_work_order`、
+`mes_set_work_center_status`、`schedule_dispatch`、`reset_demo_data`、`call_destructive_tool`。
+
+```python
+search_tools(risk_class="destructive")          # 只看破坏性工具
+search_tools(requires_approval=True)            # 只看审批门禁工具
+describe_tool(names=["erp_release_work_order"]) # 返回 risk_class / requires_approval
+```
+
+`call_tool` 只执行 READ / WRITE；破坏性操作必须走独立的 `call_destructive_tool`，便于平台侧
+分别配置审批与审计策略。
 
 ### 网关工具（3 个）
 
@@ -325,9 +372,11 @@ python web_demo/server.py
 ```
 
 启动时会自动跑一遍闭环并填充驾驶舱数据：工单同步 → 排产下发 → 逐工序报工（run）
-→ 停机 → CMM 抽检 → 质量判定 → OEE / FPY / SPC / 召回。页面包含总览、甘特、
-物料与 MRP、质量与 OEE、批次追溯、集成与网关 7 个视图；「一键跑通完整流程」
-可随时重放。
+→ 停机 → CMM 抽检 → 质量判定 → OEE / FPY / SPC / 召回。页面包含 8 个视图：
+车间总览（班次达成、Andon 分级、OEE 损失瀑布、设备状态、工单执行流转卡、停机明细）、
+排产甘特、物料与 MRP、质量与 OEE（SPC 控制图）、批次追溯、集成与审计、
+工具契约（manifest / risk_class / requires_approval / annotations）、Agent 闭环。
+「一键跑通完整流程」可随时重放。
 
 ---
 

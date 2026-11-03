@@ -635,15 +635,20 @@ def build_server(db_path: Optional[str] = None,
 
     @mcp.tool()
     def search_tools(query: str | None = None, group: str | None = None,
-                     classification: str | None = None, limit: int = 20, offset: int = 0,
+                     classification: str | None = None, risk_class: str | None = None,
+                     requires_approval: bool | None = None,
+                     limit: int = 20, offset: int = 0,
                      ctx: Context = None) -> str:
-        """按关键词/分组/读写分类检索可用工具，便于 Agent 自助发现能力。"""
+        """按关键词/分组/读写分类/风险等级/审批要求检索工具，便于 Agent 自助发现能力。"""
         def run():
             return gateway.search(mcp._tool_manager, query=query, group=group,
-                                  classification=classification, limit=limit, offset=offset,
+                                  classification=classification, risk_class=risk_class,
+                                  requires_approval=requires_approval,
+                                  limit=limit, offset=offset,
                                   registry=mcp._gateway_registry)
         return _execute("search_tools", "system", "read", ctx, run,
                         {"query": query, "group": group, "classification": classification,
+                         "risk_class": risk_class, "requires_approval": requires_approval,
                          "limit": limit, "offset": offset})
 
     # ------------------------------------------------------------ meta gateway

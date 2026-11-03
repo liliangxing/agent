@@ -66,7 +66,7 @@
   button:disabled { opacity: .5; cursor: not-allowed; }
 
   /* KPI */
-  .kpis { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; margin: 18px 0 16px; }
+  .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 18px 0 16px; }
   .kpi {
     background: linear-gradient(180deg, rgba(255,255,255,.025), transparent), var(--panel);
     border: 1px solid var(--line); border-radius: 12px; padding: 14px 15px; min-width: 0;
@@ -202,6 +202,78 @@
   .recall-hero { display: flex; flex-wrap: wrap; gap: 20px; align-items: center; justify-content: space-between; border: 1px solid rgba(248,113,113,.35); background: rgba(248,113,113,.06); border-radius: 10px; padding: 13px 15px; }
   .recall-hero .big { font-family: var(--mono); font-size: 19px; }
 
+  /* production cockpit */
+  .shiftchip { display: inline-flex; gap: 8px; align-items: center; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); font-size: 11px; font-family: var(--mono); background: var(--bg2); }
+  .andon { display: grid; gap: 8px; }
+  .andonitem { display: grid; grid-template-columns: 58px 1fr auto; gap: 10px; align-items: center; padding: 10px 12px; border: 1px solid var(--line); border-left: 3px solid var(--dim); border-radius: 9px; background: var(--bg2); }
+  .andonitem.critical { border-left-color: var(--red); background: rgba(248,113,113,.045); }
+  .andonitem.warning { border-left-color: var(--amber); background: rgba(245,165,36,.035); }
+  .andonitem.info { border-left-color: var(--cyan); }
+  .andonitem .sev { font-family: var(--mono); font-size: 10px; letter-spacing: .4px; }
+  .andonitem.critical .sev { color: var(--red); }
+  .andonitem.warning .sev { color: var(--amber); }
+  .andonitem.info .sev { color: var(--cyan); }
+  .andonitem .atitle { font-size: 12.5px; font-weight: 600; }
+  .andonitem .adetail { color: var(--muted); font-size: 11px; margin-top: 3px; line-height: 1.45; }
+  .andonitem .asrc { color: var(--dim); font-family: var(--mono); font-size: 10px; margin-top: 3px; }
+  .andon-summary { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; color: var(--muted); font-size: 11px; }
+  .linegrid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .wccard { border: 1px solid var(--line); border-radius: 10px; padding: 11px 12px; background: var(--bg2); position: relative; overflow: hidden; }
+  .wccard::after { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--dim); }
+  .wccard.RUNNING::after { background: var(--green); }
+  .wccard.BREAKDOWN::after { background: var(--red); }
+  .wccard.MAINTENANCE::after { background: var(--amber); }
+  .wccard.SETUP::after { background: var(--violet); }
+  .wccard .wchead { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .wccard .wcname { font-family: var(--mono); font-size: 13px; font-weight: 700; }
+  .wccard .wcname2 { color: var(--dim); font-size: 10.5px; margin-top: 2px; }
+  .wccard .wcstats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 9px; }
+  .wccard .wcstats div { background: rgba(255,255,255,.02); border-radius: 6px; padding: 5px 6px; }
+  .wccard .wcstats span { display: block; color: var(--dim); font-size: 9.5px; }
+  .wccard .wcstats b { font-family: var(--mono); font-size: 12px; font-weight: 600; }
+  .wccard .wcbar { height: 5px; background: #0a1424; border-radius: 99px; overflow: hidden; margin-top: 9px; }
+  .wccard .wcbar i { display: block; height: 100%; background: linear-gradient(90deg, var(--green), var(--cyan)); }
+  .shiftboard .stline { display: flex; justify-content: space-between; align-items: flex-end; gap: 14px; }
+  .shiftboard .stbig { font-family: var(--mono); font-size: 32px; font-weight: 700; color: var(--green); letter-spacing: -1px; }
+  .shiftboard .stsub { color: var(--dim); font-size: 11px; margin-top: 3px; }
+  .shiftbar { height: 12px; border-radius: 99px; background: #0a1424; border: 1px solid var(--line); overflow: hidden; margin: 12px 0 10px; }
+  .shiftbar i { display: block; height: 100%; background: linear-gradient(90deg, var(--green), var(--cyan)); }
+  .shiftgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; }
+  .shiftgrid div { background: rgba(255,255,255,.02); border-radius: 7px; padding: 6px 8px; }
+  .shiftgrid span { display: block; color: var(--dim); font-size: 10px; }
+  .shiftgrid b { font-family: var(--mono); font-size: 13px; }
+  .lossbar { display: flex; height: 30px; border-radius: 8px; overflow: hidden; border: 1px solid var(--line); }
+  .lossbar div { display: grid; place-items: center; font-family: var(--mono); font-size: 10px; color: #07111f; min-width: 2px; }
+  .losslegend { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px 14px; margin-top: 10px; font-size: 11px; color: var(--muted); }
+  .losslegend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 6px; }
+  .losslegend b { float: right; font-family: var(--mono); color: var(--text); }
+  .traveler { border: 1px solid var(--line); border-radius: 11px; background: var(--bg2); padding: 12px 13px; margin-bottom: 10px; }
+  .traveler:last-child { margin-bottom: 0; }
+  .traveler .thead { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; flex-wrap: wrap; }
+  .traveler .tno { font-family: var(--mono); font-size: 13px; font-weight: 700; }
+  .traveler .tprod { font-size: 12px; margin-top: 3px; }
+  .traveler .tmeta { color: var(--dim); font-size: 10.5px; margin-top: 4px; }
+  .opflow { display: flex; align-items: stretch; gap: 5px; overflow-x: auto; margin-top: 11px; padding-bottom: 2px; }
+  .opstep { flex: 0 0 auto; min-width: 126px; border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; background: var(--panel); }
+  .opstep.done { border-color: rgba(52,211,153,.35); background: rgba(52,211,153,.06); }
+  .opstep.current { border-color: rgba(245,165,36,.55); background: rgba(245,165,36,.08); box-shadow: 0 0 0 2px rgba(245,165,36,.08); }
+  .opstep .opname { font-size: 11px; font-weight: 600; }
+  .opstep .opmeta { color: var(--dim); font-size: 10px; font-family: var(--mono); margin-top: 3px; }
+  .opstep .opqty { color: var(--muted); font-size: 10px; margin-top: 3px; }
+  .opstep .opcheck { float: right; color: var(--green); }
+  .oparrow { align-self: center; color: var(--dim); font-family: var(--mono); font-size: 11px; }
+  .spcchart { display: grid; gap: 12px; }
+  .spcblock { border: 1px solid var(--line); border-radius: 10px; background: var(--bg2); padding: 8px 10px 4px; }
+  .spchead { display: flex; justify-content: space-between; gap: 10px; font-size: 11px; color: var(--muted); margin-bottom: 2px; }
+  .spchead b { color: var(--text); font-family: var(--mono); }
+  .spcblock svg { width: 100%; height: 150px; display: block; }
+  .manifestbar { display: grid; grid-template-columns: repeat(5, 1fr); gap: 9px; margin-bottom: 12px; }
+  .mchip { border: 1px solid var(--line); border-radius: 9px; background: var(--bg2); padding: 9px 11px; }
+  .mchip span { display: block; color: var(--dim); font-size: 10px; }
+  .mchip b { font-family: var(--mono); font-size: 18px; }
+  .mchip.warn b { color: var(--amber); }
+  .approvallist { margin-top: 9px; display: flex; flex-wrap: wrap; gap: 6px; }
+
   /* gateway */
   .gw { display: grid; grid-template-columns: 380px 1fr; gap: 14px; }
   .gw-tools { max-height: 620px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
@@ -260,70 +332,60 @@
       <div class="mark">MES</div>
       <div>
         <h1>精工智造 · 生产运营驾驶舱</h1>
-        <p>MES ↔ AI 排产 Agent ↔ ERP · 江苏某精密零部件厂 · 生产级集成演示</p>
+        <p>MES ↔ AI 排产 Agent ↔ ERP · 江苏某精密零部件厂 · 一号工厂 A 班</p>
       </div>
     </div>
     <div class="topmeta">
-      <span class="live"><i></i> 闭环在线</span>
+      <span class="live"><i></i> 当班在线</span>
+      <span class="shiftchip" id="shiftChip">当班 --</span>
       <span class="stamp" id="stamp">--</span>
       <button class="primary" id="runBtn">运行完整闭环</button>
       <button class="ghost" id="resetBtn">重置</button>
     </div>
   </header>
 
-  <section class="kpis" id="kpis">
-    <div class="kpi"><div class="k">待排产工单</div><div class="v">--</div><div class="s">ERP RELEASED</div></div>
-    <div class="kpi"><div class="k">齐套率</div><div class="v">--</div><div class="s">齐套 / 候选</div></div>
-    <div class="kpi"><div class="k">排入订单</div><div class="v">--</div><div class="s">有限产能排程</div></div>
-    <div class="kpi"><div class="k">迟单</div><div class="v">--</div><div class="s">projected &gt; due</div></div>
-    <div class="kpi"><div class="k">设备 OEE</div><div class="v">--</div><div class="s">8 个工作中心均值</div></div>
-    <div class="kpi"><div class="k">在制订单</div><div class="v">--</div><div class="s">RELEASED / IN_PROCESS</div></div>
-  </section>
+  <section class="kpis" id="kpis"></section>
 
   <nav class="tabs" id="tabs">
-    <button class="tab active" data-tab="overview">总览</button>
+    <button class="tab active" data-tab="overview">车间总览</button>
     <button class="tab" data-tab="gantt">排产甘特</button>
     <button class="tab" data-tab="mrp">物料与 MRP</button>
     <button class="tab" data-tab="quality">质量与 OEE</button>
     <button class="tab" data-tab="trace">批次追溯</button>
     <button class="tab" data-tab="integration">集成与审计</button>
-    <button class="tab" data-tab="gateway">工具网关</button>
+    <button class="tab" data-tab="gateway">工具契约</button>
+    <button class="tab" data-tab="agent">Agent 闭环</button>
   </nav>
 
   <main>
     <section class="panel active" data-panel="overview">
       <div class="grid two">
         <div class="card">
-          <h2>闭环执行 <span class="sub" id="stepCount"></span></h2>
-          <div class="timeline" id="timeline"><div class="loading">正在运行排产闭环...</div></div>
+          <h2>安灯看板 Andon <span class="sub">异常分级 · 当班闭环</span></h2>
+          <div id="andon"></div>
         </div>
         <div class="grid">
           <div class="card">
-            <h2>产能利用率</h2>
-            <div class="util" id="utilization"></div>
+            <h2>当班产出 <span class="sub" id="shiftMeta"></span></h2>
+            <div class="shiftboard" id="shiftboard"></div>
           </div>
           <div class="card">
-            <h2>工作中心实时状态</h2>
-            <div class="wcgrid" id="workcenters"></div>
+            <h2>OEE 损失结构 <span class="sub">世界级目标 85%</span></h2>
+            <div id="oeeloss"></div>
           </div>
         </div>
       </div>
       <div class="card" style="margin-top:14px;">
-        <h2>异常与瓶颈 <span class="sub">缺料 / 产能</span></h2>
-        <div id="alerts"></div>
+        <h2>产线设备状态 <span class="sub">8 个工作中心 · 当班报工与损失</span></h2>
+        <div class="linegrid" id="workcenters"></div>
       </div>
       <div class="card" style="margin-top:14px;">
-        <h2>Agent 工具面 <span class="sub">生产级 MCP 薄网关</span></h2>
-        <div class="flowbar">
-          <span class="n">search_tools</span> 发现 → <span class="n">describe_tool</span> 读契约 →
-          <span class="n">call_tool</span> 调用 → 结果整形（默认 25 行 / 100 行上限 / 20000 字符）
-        </div>
-        <p style="color:var(--muted);font-size:12px;line-height:1.7;margin:10px 0 0;">
-          每个工具带 MCP annotations（只读 / 写入 / 破坏性）。破坏性操作必须走
-          <span class="mono">call_destructive_tool</span>，客户端可在此之前弹出确认。
-          下方工具网关可直接体验分页、字段投影与截断预算。
-        </p>
-        <button style="margin-top:12px;" data-goto="gateway">打开工具网关</button>
+        <h2>工单执行流转卡 <span class="sub">工艺路线 / 工序报工 / 检验点</span></h2>
+        <div id="execution"></div>
+      </div>
+      <div class="card" style="margin-top:14px;">
+        <h2>停机与损失明细 <span class="sub">计划 / 非计划 · 关联报工</span></h2>
+        <div class="tablewrap"><table id="downtimetable"></table></div>
       </div>
     </section>
 
@@ -378,7 +440,11 @@
         </div>
       </div>
       <div class="card" style="margin-top:14px;">
-        <h2>关键尺寸 SPC <span class="sub">Cp / Cpk / 超差</span></h2>
+        <h2>SPC 控制图 <span class="sub">实测点 / USL / LSL / 均值</span></h2>
+        <div class="spcchart" id="spcchart"></div>
+      </div>
+      <div class="card" style="margin-top:14px;">
+        <h2>关键尺寸过程能力 <span class="sub">Cp / Cpk / 超差</span></h2>
         <div class="tablewrap"><table id="spctable"></table></div>
       </div>
       <div class="card" style="margin-top:14px;">
@@ -432,7 +498,8 @@
 
     <section class="panel" data-panel="gateway">
       <div class="card">
-        <h2>MCP 工具网关 <span class="sub">search → describe → call / call_destructive</span></h2>
+        <h2>MCP 工具契约 <span class="sub">manifest · risk_class · requires_approval · annotations</span></h2>
+        <div class="manifestbar" id="manifest"></div>
         <div class="gw-toolbar">
           <input id="toolSearch" placeholder="搜索工具名 / 说明，例如 inventory、排产、lot" style="flex:1;min-width:180px;">
           <select id="groupFilter"><option value="">全部分组</option></select>
@@ -441,6 +508,17 @@
             <option value="READ">READ</option>
             <option value="WRITE">WRITE</option>
             <option value="DESTRUCTIVE">DESTRUCTIVE</option>
+          </select>
+          <select id="riskFilter">
+            <option value="">全部风险</option>
+            <option value="read_only">read_only</option>
+            <option value="internal_write">internal_write</option>
+            <option value="destructive">destructive</option>
+          </select>
+          <select id="approvalFilter">
+            <option value="">审批不限</option>
+            <option value="true">需审批</option>
+            <option value="false">免审批</option>
           </select>
           <span class="badge cyan" id="toolCount">0 tools</span>
         </div>
@@ -471,6 +549,37 @@
             </div>
           </div>
         </div>
+      </div>
+    </section>
+
+    <section class="panel" data-panel="agent">
+      <div class="grid two">
+        <div class="card">
+          <h2>闭环执行 <span class="sub" id="stepCount"></span></h2>
+          <div class="timeline" id="timeline"><div class="loading">正在运行排产闭环...</div></div>
+        </div>
+        <div class="grid">
+          <div class="card">
+            <h2>产能利用率</h2>
+            <div class="util" id="utilization"></div>
+          </div>
+          <div class="card">
+            <h2>Agent 工具面 <span class="sub">生产级 MCP 薄网关</span></h2>
+            <div class="flowbar">
+              <span class="n">search_tools</span> 发现 → <span class="n">describe_tool</span> 读契约 →
+              <span class="n">call_tool</span> 调用 → 结果整形（默认 25 行 / 100 行上限 / 20000 字符）
+            </div>
+            <p style="color:var(--muted);font-size:12px;line-height:1.7;margin:10px 0 0;">
+              每个工具带 MCP annotations（只读 / 写入 / 破坏性）与 manifest 风险字段。
+              破坏性操作必须走 <span class="mono">call_destructive_tool</span>；需审批工具在清单中标记。
+            </p>
+            <button style="margin-top:12px;" data-goto="gateway">打开工具契约</button>
+          </div>
+        </div>
+      </div>
+      <div class="card" style="margin-top:14px;">
+        <h2>异常与瓶颈 <span class="sub">缺料 / 产能</span></h2>
+        <div id="alerts"></div>
       </div>
     </section>
   </main>
@@ -510,15 +619,25 @@ function classBadge(c) {
 }
 
 /* ---------------------------------------------------------------- KPIs */
+function statusBadge(st) {
+  const v = String(st);
+  const k = v === 'RUNNING' ? 'ok' : v === 'BREAKDOWN' ? 'bad'
+    : (v === 'MAINTENANCE' || v === 'SETUP') ? 'warn' : '';
+  return badge(v, k);
+}
+
 function renderKpis(s) {
   const k = s.kpis || {};
+  const sh = s.shift || {};
   const cards = [
-    { label: '待排产工单', v: k.released_work_orders, s: 'ERP RELEASED', cls: '' },
+    { label: '当班达成', v: pct(k.attainment), s: `${k.good_qty ?? 0} / ${k.planned_qty ?? 0} 件 · 报废 ${k.scrap_qty ?? 0}`, cls: (k.attainment ?? 1) < .9 ? 'warn' : 'ok' },
     { label: '齐套率', v: pct(k.kit_rate), s: `缺料 ${k.shortage_orders ?? 0} 单`, cls: (k.kit_rate ?? 1) < 1 ? 'warn' : 'ok' },
     { label: '排入订单', v: k.scheduled_orders, s: '有限产能排程', cls: '' },
     { label: '迟单', v: k.late_orders, s: 'projected > due', cls: k.late_orders > 0 ? 'bad' : 'ok' },
-    { label: '设备 OEE', v: pct(k.oee), s: '有报工设备均值', cls: 'ok' },
+    { label: '设备 OEE', v: pct(k.oee), s: '有报工设备均值', cls: (k.oee ?? 1) < .85 ? 'warn' : 'ok' },
     { label: '一次合格率', v: pct(k.fpy), s: `${k.tests ?? 0} 件抽检 / ${k.defects ?? 0} 件不良`, cls: (k.fpy ?? 1) < .95 ? 'warn' : 'ok' },
+    { label: '安灯异常', v: (k.andon_critical ?? 0) + (k.andon_warning ?? 0), s: `严重 ${k.andon_critical ?? 0} · 预警 ${k.andon_warning ?? 0}`, cls: (k.andon_critical ?? 0) > 0 ? 'bad' : (k.andon_warning ?? 0) > 0 ? 'warn' : 'ok' },
+    { label: '非计划停机', v: `${num(k.unplanned_downtime_min, 0)}m`, s: `总停机 ${num(k.downtime_min, 0)} 分钟`, cls: (k.unplanned_downtime_min ?? 0) > 30 ? 'bad' : (k.unplanned_downtime_min ?? 0) > 0 ? 'warn' : 'ok' },
   ];
   $('#kpis').innerHTML = cards.map(c => `
     <div class="kpi ${c.cls}">
@@ -526,10 +645,87 @@ function renderKpis(s) {
       <div class="v">${c.v ?? '--'}</div>
       <div class="s">${esc(c.s)}</div>
     </div>`).join('');
-  $('#stamp').textContent = s.ran_at ? `班次 ${s.shift?.date || '--'} · 最近运行 ${s.ran_at.replace('T', ' ')}` : '尚未运行';
+  const sc = $('#shiftChip');
+  sc.textContent = `当班 ${sh.date || '--'} ${sh.shift_no || ''} ${sh.window || ''}`;
+  $('#stamp').textContent = s.ran_at ? `最近运行 ${s.ran_at.replace('T', ' ')}` : '尚未运行';
 }
 
-/* ------------------------------------------------------------ overview */
+/* --------------------------------------------------- shift / andon / oee */
+const SEV_LABEL = { critical: 'CRITICAL', warning: 'WARNING', info: 'INFO' };
+const DOWNTIME_LABEL = {
+  BREAKDOWN: '设备故障', MAINTENANCE: '计划保养', SETUP: '换型调机',
+  MATERIAL_SHORTAGE: '缺料停线', QUALITY_STOP: '质量停线', IDLE: '待机',
+};
+
+function renderShiftDetail(s) {
+  const sh = s.shift || {};
+  const at = Math.min(1, sh.attainment || 0);
+  $('#shiftMeta').textContent = `${sh.date || '--'} ${sh.shift_no || ''} · ${sh.window || ''} · ${sh.team || ''}`;
+  $('#shiftboard').innerHTML = `
+    <div class="stline">
+      <div>
+        <div class="stbig">${pct(sh.attainment)}</div>
+        <div class="stsub">当班计划达成 · 产出 ${sh.good_qty ?? 0} / 计划 ${sh.planned_qty ?? 0} 件</div>
+      </div>
+      <div style="text-align:right;">
+        <div class="stsub">报废 ${sh.scrap_qty ?? 0} 件 · 异常 ${sh.downtime_events ?? 0} 起</div>
+        <div class="stsub">${sh.work_centers ?? 0} 个工作中心 · 抽检 ${sh.tests ?? 0} 件</div>
+      </div>
+    </div>
+    <div class="shiftbar"><i style="width:${at * 100}%"></i></div>
+    <div class="shiftgrid">
+      <div><span>一次合格率</span><b>${pct(sh.fpy)}</b></div>
+      <div><span>设备 OEE</span><b>${pct(sh.oee)}</b></div>
+      <div><span>迟单</span><b style="color:${sh.late_orders > 0 ? 'var(--red)' : 'var(--green)'}">${sh.late_orders ?? 0}</b></div>
+      <div><span>停机合计</span><b>${num(sh.downtime_min, 0)} min</b></div>
+      <div><span>非计划停机</span><b style="color:var(--amber)">${num(sh.unplanned_downtime_min, 0)} min</b></div>
+      <div><span>不良件</span><b style="color:${sh.defects > 0 ? 'var(--red)' : 'var(--green)'}">${sh.defects ?? 0}</b></div>
+    </div>`;
+}
+
+function renderAndon(s) {
+  const a = s.andon || { items: [], critical: 0, warning: 0 };
+  if (!a.items.length) { $('#andon').innerHTML = '<div class="empty">当班无 Andon 异常</div>'; return; }
+  const head = `<div class="andon-summary">
+    <span>${badge(`CRITICAL ${a.critical}`, 'bad')}</span>
+    <span>${badge(`WARNING ${a.warning}`, 'warn')}</span>
+    <span>${badge(`INFO ${a.items.length - a.critical - a.warning}`, 'cyan')}</span>
+    <span style="margin-left:auto;">按严重度排序 · 当班闭环</span>
+  </div>`;
+  const rows = a.items.map(x => `
+    <div class="andonitem ${esc(x.severity)}">
+      <div class="sev">${esc(SEV_LABEL[x.severity] || x.severity)}</div>
+      <div>
+        <div class="atitle">${esc(x.title)}</div>
+        <div class="adetail">${esc(x.detail)}</div>
+        <div class="asrc">${esc(x.source)}${x.time ? ' · ' + esc(x.time) : ''}</div>
+      </div>
+      <div>${badge(x.status || '待处置', x.severity === 'critical' ? 'bad' : x.severity === 'warning' ? 'warn' : '')}</div>
+    </div>`).join('');
+  $('#andon').innerHTML = head + `<div class="andon">${rows}</div>`;
+}
+
+function renderOeeLoss(s) {
+  const o = (s.oee_loss || {});
+  const parts = [
+    { key: 'oee', label: '有效 OEE', v: o.oee || 0, color: '#34d399', min: null },
+    { key: 'availability_loss', label: '可用率损失', v: o.availability_loss || 0, color: '#fb7185', min: o.availability_loss_min },
+    { key: 'performance_loss', label: '表现损失', v: o.performance_loss || 0, color: '#f5a524', min: o.performance_loss_min },
+    { key: 'quality_loss', label: '质量损失', v: o.quality_loss || 0, color: '#a78bfa', min: o.quality_loss_min },
+  ];
+  const total = parts.reduce((a, b) => a + b.v, 0) || 1;
+  const bar = parts.map(p => `<div style="width:${(p.v / total) * 100}%;background:${p.color}" title="${esc(p.label)} ${pct(p.v)}">${p.v > .09 ? pct(p.v) : ''}</div>`).join('');
+  const legend = parts.map(p => `<span><i style="background:${p.color}"></i>${esc(p.label)} <b>${pct(p.v)}${p.min !== null ? ` · ${num(p.min, 0)}m` : ''}</b></span>`).join('');
+  $('#oeeloss').innerHTML = `
+    <div class="lossbar">${bar}</div>
+    <div class="losslegend">${legend}</div>
+    <div style="color:var(--dim);font-size:10.5px;margin-top:9px;line-height:1.6;">
+      A ${pct(o.availability)} × P ${pct(o.performance)} × Q ${pct(o.quality)} =
+      <b style="color:var(--green)">OEE ${pct(o.oee)}</b><br>
+      计划 ${num(o.planned_minutes, 0)} min · 运行 ${num(o.run_minutes, 0)} min · 理论 ${num(o.ideal_minutes, 0)} min
+    </div>`;
+}
+
 function renderTimeline(steps) {
   $('#stepCount').textContent = `${steps.length} 步`;
   $('#timeline').innerHTML = steps.map((s, i) => `
@@ -551,14 +747,151 @@ function renderUtilization(rows) {
 }
 
 function renderWorkCenters(rows) {
+  const oeeMap = Object.fromEntries((STATE?.oee || []).map(x => [x.work_center, x]));
+  const dtMap = {};
+  (STATE?.downtime || []).forEach(d => { dtMap[d.work_center] = (dtMap[d.work_center] || 0) + d.duration_min; });
   $('#workcenters').innerHTML = rows.map(wc => {
-    const st = String(wc.status);
-    const kind = st === 'RUNNING' ? 'ok' : st === 'BREAKDOWN' ? 'bad' : st === 'MAINTENANCE' ? 'warn' : '';
-    return `<div class="wc">
-      <div class="code">${esc(wc.code)} ${badge(st, kind)}</div>
-      <div class="meta">${esc(wc.name || '')} · ${esc(wc.current_production_order || '空闲')}</div>
+    const o = oeeMap[wc.code] || {};
+    const dt = dtMap[wc.code] || 0;
+    return `<div class="wccard ${esc(wc.status)}">
+      <div class="wchead">
+        <div>
+          <div class="wcname">${esc(wc.code)}</div>
+          <div class="wcname2">${esc(wc.name || '')}</div>
+        </div>
+        ${statusBadge(wc.status)}
+      </div>
+      <div class="wcstats">
+        <div><span>报工</span><b>${o.runs ?? 0}</b></div>
+        <div><span>OEE</span><b style="color:${(o.oee ?? 0) >= .85 ? 'var(--green)' : 'var(--amber)'}">${o.runs ? pct(o.oee) : '--'}</b></div>
+        <div><span>停机</span><b>${num(dt, 0)}m</b></div>
+      </div>
+      <div class="wcbar"><i style="width:${Math.min(100, (o.oee || 0) * 100)}%"></i></div>
+      <div style="color:var(--dim);font-size:10px;margin-top:6px;" class="mono">${esc(wc.current_production_order || '空闲待单')}</div>
+    </div>`;
+  }).join('') || '<div class="empty">暂无工作中心</div>';
+}
+
+function renderExecution(s) {
+  const rows = s.execution || [];
+  if (!rows.length) { $('#execution').innerHTML = '<div class="empty">运行闭环后生成工单执行流转卡</div>'; return; }
+  $('#execution').innerHTML = rows.map(po => {
+    const stKind = po.status === 'COMPLETED' ? 'ok' : po.status === 'IN_PROCESS' ? 'warn' : 'cyan';
+    const prog = Math.round((po.progress || 0) * 100);
+    const ops = (po.operations || []).map((op, i) => {
+      const done = op.status === 'COMPLETED';
+      const current = po.current_operation && po.current_operation.operation_no === op.operation_no;
+      const tip = op.instructions ? ` title="${esc(op.instructions)}"` : '';
+      const mark = done ? '<span class="opcheck">✓</span>' : '';
+      return `${i ? '<div class="oparrow">→</div>' : ''}
+        <div class="opstep ${done ? 'done' : current ? 'current' : ''}"${tip}>
+          ${mark}
+          <div class="opname">OP${op.operation_no} ${esc(op.name)}</div>
+          <div class="opmeta">${esc(op.work_center)} · ${esc(op.status)}${op.inspection_required ? ' · 检验' : ''}</div>
+          <div class="opqty">合格 ${op.qty_good} / 不良 ${op.qty_bad} · 报工 ${op.run_count}${op.downtime_min ? ` · 停机 ${num(op.downtime_min, 0)}m` : ''}</div>
+          ${op.instructions ? `<div class="opmeta" style="margin-top:4px;color:var(--muted);">${esc(op.instructions)}</div>` : ''}
+        </div>`;
+    }).join('');
+    const cur = po.current_operation;
+    return `<div class="traveler">
+      <div class="thead">
+        <div>
+          <div class="tno">${esc(po.production_order_no)} ${badge(po.status, stKind)}</div>
+          <div class="tprod">${esc(po.product_name)} <span class="mono" style="color:var(--dim)">${esc(po.product_sku)}</span> · ${po.quantity} 件</div>
+          <div class="tmeta">ERP ${esc(po.erp_work_order_no)} · 交期 ${esc(po.due_date)} · 批次 ${esc(po.lot_no)} · 报废 ${po.scrap_qty} 件 · 抽检 ${po.tests} 件${po.test_fails ? ` · 不良 ${po.test_fails}` : ''}${po.downtime_min ? ` · 停机 ${num(po.downtime_min, 0)}m` : ''}</div>
+        </div>
+        <div style="text-align:right;min-width:170px;">
+          <div class="mono" style="font-size:12px;">完成 ${po.completed_qty} / ${po.quantity} 件</div>
+          <div class="track" style="height:6px;margin-top:6px;background:#0a1424;border-radius:99px;overflow:hidden;">
+            <div style="height:100%;width:${prog}%;background:linear-gradient(90deg,var(--green),var(--cyan));"></div>
+          </div>
+          <div class="tmeta" style="margin-top:5px;">${cur ? `当前 OP${cur.operation_no} ${esc(cur.name)} @ ${esc(cur.work_center)}` : '工艺路线已完成'}</div>
+        </div>
+      </div>
+      <div class="opflow">${ops || '<div class="empty">暂无工艺路线</div>'}</div>
     </div>`;
   }).join('');
+}
+
+function renderDowntime(s) {
+  const rows = s.downtime || [];
+  $('#downtimetable').innerHTML = `
+    <thead><tr><th>开始</th><th>设备</th><th>报工</th><th>原因</th><th>类型</th><th>时长</th></tr></thead>
+    <tbody>${rows.slice(-14).reverse().map(d => `
+      <tr>
+        <td class="mono" style="color:var(--dim)">${esc(d.start_time)}</td>
+        <td class="mono">${esc(d.work_center)}</td>
+        <td class="mono">${esc(d.run_no || '--')}</td>
+        <td>${esc(DOWNTIME_LABEL[d.reason] || d.reason)}</td>
+        <td>${d.planned ? badge('计划', 'cyan') : badge('非计划', String(d.reason) === 'BREAKDOWN' ? 'bad' : 'warn')}</td>
+        <td class="num">${num(d.duration_min, 0)} min</td>
+      </tr>`).join('') || '<tr><td colspan="6" class="empty">暂无停机记录</td></tr>'}</tbody>`;
+}
+
+/* ------------------------------------------------------------------ SPC */
+function spcSvg(c) {
+  const pts = (c.points || []).filter(p => p.measured !== null && p.measured !== undefined);
+  const W = 600, H = 150, padL = 40, padR = 14, padT = 12, padB = 22;
+  if (!pts.length) return '<div class="empty">暂无检测点</div>';
+  const vals = pts.map(p => Number(p.measured));
+  const lo = Math.min(...vals, c.lsl ?? Infinity);
+  const hi = Math.max(...vals, c.usl ?? -Infinity);
+  const span = Math.max(1e-9, hi - lo);
+  const y = (v) => padT + (1 - (v - lo) / span) * (H - padT - padB);
+  const x = (i) => padL + (pts.length === 1 ? (W - padL - padR) / 2 : (i / (pts.length - 1)) * (W - padL - padR));
+  const line = pts.map((p, i) => `${x(i).toFixed(1)},${y(Number(p.measured)).toFixed(1)}`).join(' ');
+  const dots = pts.map((p, i) => {
+    const bad = String(p.result) === 'FAIL';
+    return `<circle cx="${x(i).toFixed(1)}" cy="${y(Number(p.measured)).toFixed(1)}" r="${bad ? 3.8 : 2.6}" fill="${bad ? '#fb7185' : '#38bdf8'}"><title>${esc(p.unit_ref)} · ${num(p.measured, 4)} · ${esc(p.result)}</title></circle>`;
+  }).join('');
+  const lim = (v, color, label) => v === null || v === undefined ? '' :
+    `<line x1="${padL}" x2="${W - padR}" y1="${y(v)}" y2="${y(v)}" stroke="${color}" stroke-width="1" stroke-dasharray="4 3"/>
+     <text x="${padL - 4}" y="${y(v) + 3}" text-anchor="end" fill="${color}" font-size="8" font-family="monospace">${label} ${num(v, 3)}</text>`;
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+    <line x1="${padL}" x2="${W - padR}" y1="${H - padB}" y2="${H - padB}" stroke="#22304a"/>
+    ${lim(c.usl, '#fb7185', 'USL')}
+    ${lim(c.lsl, '#fb7185', 'LSL')}
+    <line x1="${padL}" x2="${W - padR}" y1="${y(c.mean)}" y2="${y(c.mean)}" stroke="#34d399" stroke-width="1" stroke-dasharray="2 4"/>
+    <polyline points="${line}" fill="none" stroke="#38bdf8" stroke-width="1.4"/>
+    ${dots}
+  </svg>`;
+}
+
+function renderSpcChart(s) {
+  const chars = (s.quality?.spc?.characteristics) || [];
+  $('#spcchart').innerHTML = chars.map(c => `
+    <div class="spcblock">
+      <div class="spchead">
+        <span>${esc(c.characteristic)} <b>n=${c.n}</b></span>
+        <span>Cpk <b style="color:${c.cpk !== null && c.cpk < 1 ? 'var(--red)' : 'var(--green)'}">${num(c.cpk, 2)}</b> · 超差 ${c.out_of_spec}</span>
+      </div>
+      ${spcSvg(c)}
+    </div>`).join('') || '<div class="empty">暂无 SPC 数据</div>';
+}
+
+/* -------------------------------------------------------------- manifest */
+let MANIFEST = null;
+const RISK_LABEL = { read_only: '只读', internal_write: '内部写', destructive: '破坏性' };
+
+function renderManifest(m) {
+  MANIFEST = m;
+  if (!m) { $('#manifest').innerHTML = ''; return; }
+  const c = m.by_risk_class || {};
+  const chips = [
+    { label: '工具总数', v: m.total, cls: '' },
+    { label: 'read_only', v: c.read_only ?? 0, cls: '' },
+    { label: 'internal_write', v: c.internal_write ?? 0, cls: '' },
+    { label: 'destructive', v: c.destructive ?? 0, cls: 'warn' },
+    { label: '需审批', v: (m.approval_required || []).length, cls: 'warn' },
+  ];
+  $('#manifest').innerHTML = chips.map(x => `<div class="mchip ${x.cls}"><span>${esc(x.label)}</span><b>${x.v}</b></div>`).join('')
+    + `<div style="grid-column:1/-1;" class="approvallist">
+        <span style="color:var(--dim);font-size:10.5px;align-self:center;">审批门禁：</span>
+        ${(m.approval_required || []).map(n => badge(n, 'warn')).join(' ')}
+        <span style="color:var(--dim);font-size:10.5px;align-self:center;margin-left:8px;">
+          governance ${esc((m.governance_gates || []).join(' / '))} · ${esc(m.writes_allowed)} · risk ${esc(m.risk_level)}
+        </span>
+      </div>`;
 }
 
 function renderAlerts(s) {
@@ -924,9 +1257,13 @@ function toolFiltered() {
   const q = ($('#toolSearch').value || '').trim().toLowerCase();
   const g = $('#groupFilter').value;
   const c = $('#classFilter').value;
+  const risk = $('#riskFilter').value;
+  const appr = $('#approvalFilter').value;
   return TOOLS.filter(t =>
     (!g || t.group === g) &&
     (!c || t.classification === c) &&
+    (!risk || t.risk_class === risk) &&
+    (!appr || String(!!t.requires_approval) === appr) &&
     (!q || t.name.toLowerCase().includes(q) || (t.description || '').toLowerCase().includes(q))
   );
 }
@@ -939,6 +1276,7 @@ function renderToolList() {
       <div class="row1">
         <span class="n">${esc(t.name)}</span>
         ${classBadge(t.classification)}
+        ${t.requires_approval ? badge('审批', 'warn') : ''}
       </div>
       <div class="d">${esc(t.description || '')}</div>
     </div>`).join('') || '<div class="empty">没有匹配的工具</div>';
@@ -954,7 +1292,8 @@ async function selectTool(name) {
   $('#toolBadges').innerHTML = [
     classBadge(SELECTED.classification),
     badge(SELECTED.group, 'cyan'),
-    badge('descriptive', ''),
+    badge(SELECTED.risk_class || '--', SELECTED.risk_class === 'destructive' ? 'destructive' : SELECTED.risk_class === 'internal_write' ? 'warn' : 'ok'),
+    SELECTED.requires_approval ? badge('需审批', 'warn') : badge('免审批', ''),
   ].join(' ');
   const isMeta = ['search_tools', 'describe_tool', 'call_tool', 'call_destructive_tool'].includes(SELECTED.name);
   $('#callBtn').disabled = isMeta || SELECTED.classification === 'DESTRUCTIVE';
@@ -976,6 +1315,8 @@ async function selectTool(name) {
     $('#toolBadges').innerHTML = [
       classBadge(tool.classification),
       badge(tool.group, 'cyan'),
+      badge(tool.risk_class || RISK_LABEL[tool.classification] || '--', tool.risk_class === 'destructive' ? 'destructive' : tool.risk_class === 'internal_write' ? 'warn' : 'ok'),
+      tool.requires_approval ? badge('需审批', 'warn') : badge('免审批', ''),
       a.readOnlyHint ? badge('只读', 'ok') : badge('写入', 'warn'),
       a.destructiveHint ? badge('破坏性', 'destructive') : '',
       a.idempotentHint ? badge('幂等', '') : '',
@@ -1072,12 +1413,18 @@ async function callSelected(destructive) {
 function renderAll(s) {
   STATE = s;
   renderKpis(s);
+  renderShiftDetail(s);
+  renderAndon(s);
+  renderOeeLoss(s);
   renderUtilization(s.utilization);
   renderWorkCenters(s.work_centers || []);
+  renderExecution(s);
+  renderDowntime(s);
   renderAlerts(s);
   renderGantt(s);
   renderMrp(s);
   renderQuality(s);
+  renderSpcChart(s);
   renderTrace(s);
   renderRecall(s);
   renderIntegration(s);
@@ -1122,6 +1469,7 @@ function bindTabs() {
 async function loadTools() {
   const data = await api('/api/tools');
   TOOLS = data.tools || [];
+  renderManifest(data.manifest);
   const gf = $('#groupFilter');
   gf.innerHTML = '<option value="">全部分组</option>' +
     (data.groups || []).map(g => `<option value="${esc(g)}">${esc(g)}</option>`).join('');
@@ -1132,6 +1480,8 @@ function bindGateway() {
   $('#toolSearch').addEventListener('input', renderToolList);
   $('#groupFilter').addEventListener('change', renderToolList);
   $('#classFilter').addEventListener('change', renderToolList);
+  $('#riskFilter').addEventListener('change', renderToolList);
+  $('#approvalFilter').addEventListener('change', renderToolList);
   $('#callBtn').addEventListener('click', () => callSelected(false));
   $('#destructiveBtn').addEventListener('click', () => {
     if (confirm('该操作会修改或重置演示数据，确认调用 call_destructive_tool？')) callSelected(true);

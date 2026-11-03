@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
-TOOLS: list[dict[str, str]] = [
+_TOOL_DEFS: list[dict[str, str]] = [
     # ------------------------------------------------------------------ ERP
     {"name": "erp_list_items", "group": "ERP", "description": "查询物料主数据"},
     {"name": "erp_get_item", "group": "ERP", "description": "按 SKU 查询物料"},
@@ -91,6 +91,21 @@ TOOLS: list[dict[str, str]] = [
 
 GROUPS: list[str] = ["ERP", "MES", "排产", "集成", "运维", "网关"]
 
+RISK_CLASSES = ("read_only", "internal_write", "destructive")
+
+# Manifest-style governance metadata.  ``requires_approval`` mirrors the
+# reference mcp-mes manifest: a syntactically writable tool can still be
+# gated at the platform boundary.
+_APPROVAL_REQUIRED = {
+    "erp_release_work_order",
+    "erp_close_work_order",
+    "erp_cancel_work_order",
+    "mes_set_work_center_status",
+    "schedule_dispatch",
+    "reset_demo_data",
+    "call_destructive_tool",
+}
+
 
 _DESTRUCTIVE = {"reset_demo_data", "call_destructive_tool"}
 
@@ -136,8 +151,36 @@ def classification(name: str) -> str:
     return "WRITE"
 
 
-def entry(tool: dict[str, str]) -> dict[str, str]:
-    return {**tool, "classification": classification(tool["name"])}
+_RISK_BY_CLASSIFICATION = {
+    "READ": "read_only",
+    "WRITE": "internal_write",
+    "DESTRUCTIVE": "destructive",
+}
+
+
+def risk_class_for(name: str) -> str:
+    """Manifest risk class derived from the READ/WRITE/DESTRUCTIVE split."""
+    return _RISK_BY_CLASSIFICATION[classification(name)]
+
+
+def requires_approval_for(name: str) -> bool:
+    """Whether the platform should require an approval before execution."""
+    return name in _APPROVAL_REQUIRED
+
+
+def entry(tool: dict[str, Any]) -> dict[str, Any]:
+    name = tool["name"]
+    return {
+        **tool,
+        "classification": classification(name),
+        "risk_class": risk_class_for(name),
+        "requires_approval": requires_approval_for(name),
+    }
+
+
+# Every catalog row carries the manifest fields, so search_tools, describe_tool
+# and the web demo all expose the same governance contract.
+TOOLS: list[dict[str, Any]] = [entry(tool) for tool in _TOOL_DEFS]
 
 
 def get(name: str) -> dict[str, str] | None:
@@ -148,21 +191,54 @@ def get(name: str) -> dict[str, str] | None:
 
 
 def search(query: str | None = None, group: str | None = None,
-           classification_filter: str | None = None) -> list[dict[str, str]]:
+           classification_filter: str | None = None,
+           risk_class: str | None = None,
+           requires_approval: bool | None = None) -> list[dict[str, Any]]:
     """Case-insensitive search over name/description with optional filters."""
     token = (query or "").strip().lower()
-    results: list[dict[str, str]] = []
+    results: list[dict[str, Any]] = []
     for tool in TOOLS:
         if group and tool["group"] != group:
             continue
-        item = entry(tool)
-        if classification_filter and item["classification"] != classification_filter:
+        if classification_filter and tool["classification"] != classification_filter:
+            continue
+        if risk_class and tool["risk_class"] != risk_class:
+            continue
+        if requires_approval is not None and tool["requires_approval"] != requires_approval:
             continue
         if token and token not in tool["name"].lower() and token not in tool["description"].lower():
             continue
-        results.append(item)
+        results.append(entry(tool))
     return results
 
 
 def as_dicts() -> list[dict[str, Any]]:
     return [dict(entry(t), desc=t["description"]) for t in TOOLS]
+
+def manifest_summary() -> dict[str, Any]:
+    """Compact manifest used by the web demo and governance panels."""
+    by_risk: dict[str, int] = {key: 0 for key in RISK_CLASSES}
+    by_class: dict[str, int] = {"READ": 0, "WRITE": 0, "DESTRUCTIVE": 0}
+    for tool in TOOLS:
+        by_risk[tool["risk_class"]] += 1
+        by_class[tool["classification"]] += 1
+    approvals = [tool["name"] for tool in TOOLS if tool["requires_approval"]]
+    return {
+        "server_id": "mcp_mes",
+        "display_name": "MES Scheduling MCP Server",
+        "version": "1.2.0",
+        "domain": "manufacturing",
+        "risk_level": "medium",
+        "writes_allowed": "gated",
+        "governance_gates": ["tool_approval", "rbac"],
+        "transports": ["stdio", "http"],
+        "total": len(TOOLS),
+        "by_risk_class": by_risk,
+        "by_classification": by_class,
+        "approval_required": approvals,
+    }
+
+
+def manifest() -> dict[str, Any]:
+    """Full manifest contract: summary plus one row per tool."""
+    return {**manifest_summary(), "tools": [entry(tool) for tool in TOOLS]}
