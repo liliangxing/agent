@@ -689,8 +689,8 @@ function renderAndon(s) {
   const head = `<div class="andon-summary">
     <span>${badge(`CRITICAL ${a.critical}`, 'bad')}</span>
     <span>${badge(`WARNING ${a.warning}`, 'warn')}</span>
-    <span>${badge(`INFO ${a.items.length - a.critical - a.warning}`, 'cyan')}</span>
-    <span style="margin-left:auto;">按严重度排序 · 当班闭环</span>
+    <span>${badge(`INFO ${a.info ?? 0}`, 'cyan')}</span>
+    <span style="margin-left:auto;">TOP ${a.items.length} / 共 ${a.total ?? a.items.length} 条 · 按严重度排序</span>
   </div>`;
   const rows = a.items.map(x => `
     <div class="andonitem ${esc(x.severity)}">

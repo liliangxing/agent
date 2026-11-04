@@ -387,6 +387,7 @@ def _andon_items(shortages, late_orders, downtime, tests, spc):
     items.sort(key=lambda x: rank.get(x["severity"], 3))
     return {
         "items": items[:10],
+        "total": len(items),
         "critical": sum(1 for x in items if x["severity"] == "critical"),
         "warning": sum(1 for x in items if x["severity"] == "warning"),
         "info": sum(1 for x in items if x["severity"] == "info"),

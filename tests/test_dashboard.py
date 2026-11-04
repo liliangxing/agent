@@ -21,6 +21,8 @@ def test_state_exposes_shift_andon_and_oee_loss():
     assert andon["items"]
     assert andon["critical"] >= 1
     assert len(andon["items"]) <= 10
+    assert andon["info"] >= 0
+    assert andon["total"] >= len(andon["items"])
     assert all(x["severity"] in ("critical", "warning", "info")
                for x in andon["items"])
 
