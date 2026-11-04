@@ -11,6 +11,8 @@ def test_state_exposes_shift_andon_and_oee_loss():
     server.run_all()
     state = server.build_state()
 
+    assert state["steps"] and all("step" in step for step in state["steps"])
+
     shift = state["shift"]
     assert shift["window"] == "08:00-16:00"
     assert shift["planned_qty"] > 0

@@ -1513,7 +1513,17 @@ async function init() {
   } catch (e) {
     toast(`工具目录加载失败: ${e.message}`);
   }
-  await runAll();
+  try {
+    const s = await api('/api/state');
+    if (s.ran_at) {
+      renderAll(s);
+      renderTimeline(s.steps || []);
+    } else {
+      await runAll();
+    }
+  } catch (e) {
+    toast(`状态加载失败: ${e.message}`);
+  }
 }
 
 init();

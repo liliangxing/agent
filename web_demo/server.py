@@ -247,6 +247,7 @@ def run_all() -> dict:
         "capacity_blocked": plan["capacity_blocked"],
         "target_po": target.production_order_no if target else None,
         "recall_lot": recall_lot,
+        "steps": steps,
     })
 
     return {
@@ -518,6 +519,7 @@ def build_state() -> dict:
 
     return {
         "ran_at": STATE.get("ran_at"),
+        "steps": STATE.get("steps", []),
         "shift": shift_detail,
         "health": backend.health(),
         "kpis": kpis,
