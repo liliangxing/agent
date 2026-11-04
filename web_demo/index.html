@@ -312,6 +312,8 @@
     .grid.two, .grid.halves { grid-template-columns: 1fr; }
     .gw { grid-template-columns: 1fr; }
     .gw-tools { max-height: 320px; }
+    .linegrid { grid-template-columns: repeat(2, 1fr); }
+    .manifestbar { grid-template-columns: repeat(3, 1fr); }
   }
   @media (max-width: 640px) {
     .wrap { padding: 14px 12px 50px; }
@@ -322,6 +324,10 @@
     .fieldrow { grid-template-columns: 1fr 1fr; }
     .topmeta { width: 100%; }
     .topmeta button { flex: 1; }
+    .linegrid, .shiftgrid { grid-template-columns: 1fr; }
+    .manifestbar { grid-template-columns: repeat(2, 1fr); }
+    .andonitem { grid-template-columns: 1fr auto; }
+    .andonitem .sev { grid-column: 1 / -1; }
   }
 </style>
 </head>
